@@ -1,0 +1,169 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans: var(--font-plus-jakarta);
+  --font-heading: var(--font-plus-jakarta);
+  --font-display: var(--font-fraunces);
+
+  --color-brand: var(--brand);
+  --color-brand-accent: var(--brand-accent);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-ink: var(--brand-ink);
+  --color-paper: var(--paper);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.35);
+  --radius-2xl: calc(var(--radius) * 1.7);
+  --radius-3xl: calc(var(--radius) * 2.1);
+  --radius-4xl: calc(var(--radius) * 2.5);
+}
+
+:root {
+  color-scheme: light;
+
+  --background: #f7f5f0;
+  --foreground: #1c2321;
+  --card: #ffffff;
+  --card-foreground: #1c2321;
+  --popover: #ffffff;
+  --popover-foreground: #1c2321;
+
+  --primary: #0e4f45;
+  --primary-foreground: #f7fbf9;
+  --secondary: #efe9df;
+  --secondary-foreground: #26312e;
+  --muted: #f0ece4;
+  --muted-foreground: #6b7280;
+  --accent: #e8f0ed;
+  --accent-foreground: #0e4f45;
+  --destructive: #b4433a;
+  --destructive-foreground: #fff8f7;
+
+  --border: #e7e2d9;
+  --input: #e2ddd3;
+  --ring: #0e4f45;
+
+  --chart-1: #0e4f45;
+  --chart-2: #c65d3b;
+  --chart-3: #b7791f;
+  --chart-4: #2f7d5b;
+  --chart-5: #6b7280;
+
+  --radius: 0.75rem;
+
+  --sidebar: #fbf9f5;
+  --sidebar-foreground: #1c2321;
+  --sidebar-primary: #0e4f45;
+  --sidebar-primary-foreground: #f7fbf9;
+  --sidebar-accent: #e8f0ed;
+  --sidebar-accent-foreground: #0e4f45;
+  --sidebar-border: #e7e2d9;
+  --sidebar-ring: #0e4f45;
+
+  --brand: #0e4f45;
+  --brand-accent: #c65d3b;
+  --brand-soft: #e8f0ed;
+  --brand-ink: #0b3f37;
+  --paper: #f7f5f0;
+  --success: #2f7d5b;
+  --warning: #b7791f;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/40;
+  }
+
+  html {
+    @apply bg-background font-sans;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    @apply min-h-dvh bg-background text-foreground antialiased;
+    font-feature-settings:
+      "ss01" 1,
+      "cv11" 1;
+  }
+
+  button,
+  [role="button"] {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  [role="button"][aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--brand-accent) 24%, white);
+    color: var(--foreground);
+  }
+}
+
+@layer utilities {
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: var(--border);
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
