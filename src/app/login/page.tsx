@@ -91,7 +91,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
             Satu tempat untuk seluruh layanan restoran.
           </h1>
           <p className="mt-4 max-w-md text-sm leading-relaxed text-primary-foreground/70">
-            Saji menyatukan pesanan, pembayaran, dapur, stok, dan laporan agar
+            Nine Licious menyatukan pesanan, pembayaran, dapur, stok, dan laporan agar
             setiap tim bekerja dari data yang sama.
           </p>
 
@@ -132,7 +132,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
                 Selamat datang
               </p>
               <h2 className="mt-1.5 font-display text-3xl font-semibold tracking-[-0.025em] text-foreground">
-                Masuk ke Saji
+                Masuk ke Nine Licious
               </h2>
               <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
                 Gunakan akun staf yang diberikan admin restoran. Tidak ada
@@ -183,7 +183,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
         </div>
 
         <footer className="px-5 py-4 text-center text-[0.65rem] text-muted-foreground">
-          © 2026 Saji POS · Antarmuka terang · Lingkungan{" "}
+          © 2026 Nine Licious · Antarmuka terang · Lingkungan{" "}
           {APP_ENVIRONMENT_LABELS[environment]}
         </footer>
       </div>

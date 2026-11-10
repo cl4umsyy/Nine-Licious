@@ -387,7 +387,7 @@ function StatusForm({
             <span className="font-medium text-foreground">
               {target.user.full_name}
             </span>{" "}
-            akan dapat masuk kembali dan memakai Saji sesuai perannya.
+            akan dapat masuk kembali dan memakai Nine Licious sesuai perannya.
           </>
         ) : (
           <>

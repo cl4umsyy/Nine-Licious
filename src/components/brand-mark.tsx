@@ -23,7 +23,7 @@ export function BrandMark({
         "group inline-flex items-center gap-2.5 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
         className,
       )}
-      aria-label="Saji POS"
+      aria-label="Nine Licious"
     >
       <span
         className={cn(
@@ -34,7 +34,7 @@ export function BrandMark({
         )}
       >
         <span className="font-display text-[1.35rem] font-semibold leading-none">
-          S
+          N
         </span>
         <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-brand-accent" />
       </span>
@@ -46,7 +46,7 @@ export function BrandMark({
               inverse ? "text-primary-foreground" : "text-foreground",
             )}
           >
-            Saji
+            Nine Licious
           </span>
           <span
             className={cn(

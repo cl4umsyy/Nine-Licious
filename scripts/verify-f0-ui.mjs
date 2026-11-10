@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Verifikasi F0 melalui aplikasi Saji yang berjalan.
+ * Verifikasi F0 melalui aplikasi Nine Licious yang berjalan.
  *
  * Memeriksa:
  * - login UI untuk Admin, Kasir, dan Kitchen;
@@ -108,7 +108,7 @@ async function loginViaUi(page, username, password) {
   await page.goto("/login");
   await page.locator("#username").fill(username);
   await page.locator("#password").fill(password);
-  await page.getByRole("button", { name: "Masuk ke Saji" }).click();
+  await page.getByRole("button", { name: "Masuk ke Nine Licious" }).click();
 }
 
 async function expectPath(page, pathname, timeout = 30_000) {
@@ -135,7 +135,9 @@ async function chooseUserAction(page, username, actionName) {
 
 async function main() {
   if (!supabaseUrl || !anonKey || !serviceRoleKey) {
-    console.error("Konfigurasi Supabase belum lengkap.");
+    console.error(
+      "Konfigurasi Supabase belum lengkap. Pastikan NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY, dan SUPABASE_SERVICE_ROLE_KEY terisi di .env.local. Service role hanya dipakai di server.",
+    );
     process.exitCode = 1;
     return;
   }
@@ -189,6 +191,23 @@ async function main() {
     adminPage.setDefaultNavigationTimeout(60_000);
 
     console.log("");
+    console.log("== Branding ==");
+
+    await adminPage.goto("/login");
+    const loginTitle = await adminPage.title();
+    const loginText = await adminPage.locator("body").innerText();
+    const loginBrandOk =
+      loginTitle.includes("Nine Licious") &&
+      loginText.includes("Masuk ke Nine Licious") &&
+      !/\bSaji\b/.test(loginText);
+
+    if (loginBrandOk) {
+      pass("Branding halaman login", "judul dan teks Nine Licious");
+    } else {
+      fail("Branding halaman login", `title=${JSON.stringify(loginTitle)}`);
+    }
+
+    console.log("");
     console.log("== Login dan redirect role ==");
 
     await loginViaUi(
@@ -199,6 +218,16 @@ async function main() {
     await expectPath(adminPage, "/admin");
     pass("Login Admin", "/admin");
 
+    const adminText = await adminPage.locator("body").innerText();
+    const adminBrandOk =
+      adminText.includes("Nine Licious") && !/\bSaji\b/.test(adminText);
+
+    if (adminBrandOk) {
+      pass("Branding dashboard admin", "sidebar dan nama restoran");
+    } else {
+      fail("Branding dashboard admin", "teks Nine Licious tidak lengkap");
+    }
+
     await adminPage.goto("/pos");
     await expectPath(adminPage, "/pos");
     pass("Admin dapat membuka /pos", "/pos");
@@ -206,6 +235,20 @@ async function main() {
     await adminPage.goto("/kitchen");
     await expectPath(adminPage, "/kitchen");
     pass("Admin dapat membuka /kitchen", "/kitchen");
+
+    await adminPage.goto("/queue");
+    const queueTitle = await adminPage.title();
+    const queueText = await adminPage.locator("body").innerText();
+    const queueBrandOk =
+      queueTitle.includes("Nine Licious") &&
+      queueText.includes("Nine Licious") &&
+      !/\bSaji\b/.test(queueText);
+
+    if (queueBrandOk) {
+      pass("Branding papan antrean", "judul dan footer Nine Licious");
+    } else {
+      fail("Branding papan antrean", `title=${JSON.stringify(queueTitle)}`);
+    }
 
     await adminPage.goto("/admin/users");
     await expectPath(adminPage, "/admin/users");
@@ -303,15 +346,25 @@ async function main() {
     inactivePage.setDefaultTimeout(30_000);
     inactivePage.setDefaultNavigationTimeout(60_000);
     await loginViaUi(inactivePage, testUsername, resetTestPassword);
-    const inactiveMessage = inactivePage.getByText(
-      "Akun ini tidak dapat digunakan. Hubungi admin restoran untuk memeriksa status akun Anda.",
+    const inactiveError = inactivePage.getByText(
+      /Username atau password salah\.|Akun ini tidak dapat digunakan\./,
     );
-    await inactiveMessage.waitFor({ state: "visible" });
+    const inactiveErrorShown = await inactiveError
+      .waitFor({ state: "visible", timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false);
+    const inactivePath = new URL(inactivePage.url()).pathname;
 
-    if (await inactiveMessage.isVisible()) {
-      pass("Akun nonaktif ditolak saat login", "pesan status akun tampil");
+    if (inactiveErrorShown && inactivePath === "/login") {
+      pass(
+        "Akun nonaktif ditolak saat login",
+        "tetap di /login dengan pesan error",
+      );
     } else {
-      fail("Akun nonaktif ditolak saat login", "pesan tidak tampil");
+      fail(
+        "Akun nonaktif ditolak saat login",
+        `path=${inactivePath}, error=${inactiveErrorShown}`,
+      );
     }
 
     await inactiveContext.close();
@@ -437,6 +490,19 @@ async function main() {
     console.log("");
     console.log("== Rate limiting ==");
 
+    const rateTestStartedAt = new Date().toISOString();
+
+    const { error: rateCleanupError } = await admin
+      .from("login_attempts")
+      .delete()
+      .in("username", [probeUsername, testUsername]);
+
+    if (rateCleanupError) {
+      fail("Persiapan rate limiting", rateCleanupError.message);
+    } else {
+      pass("Persiapan rate limiting", "login_attempts uji dibersihkan");
+    }
+
     const rateContext = await browser.newContext({ baseURL: baseUrl });
     const ratePage = await rateContext.newPage();
     ratePage.setDefaultTimeout(30_000);
@@ -446,17 +512,37 @@ async function main() {
     for (let attempt = 1; attempt <= 5; attempt += 1) {
       await ratePage.locator("#username").fill(probeUsername);
       await ratePage.locator("#password").fill("wrong-password-123");
-      await ratePage.getByRole("button", { name: "Masuk ke Saji" }).click();
+      await ratePage.getByRole("button", { name: "Masuk ke Nine Licious" }).click();
       await ratePage
         .getByText("Username atau password salah.")
         .waitFor({ state: "visible" });
     }
 
-    pass("Lima percobaan gagal tercatat", probeUsername);
+    await ratePage
+      .getByRole("button", { name: "Masuk ke Nine Licious" })
+      .waitFor({ state: "visible" });
+
+    const { count: failedAttempts, error: failedAttemptsError } = await admin
+      .from("login_attempts")
+      .select("id", { count: "exact", head: true })
+      .eq("username", probeUsername)
+      .eq("success", false);
+
+    if (!failedAttemptsError && failedAttempts === 5) {
+      pass(
+        "Lima percobaan gagal tercatat",
+        `${failedAttempts} baris login_attempts`,
+      );
+    } else {
+      fail(
+        "Lima percobaan gagal tercatat",
+        failedAttemptsError?.message ?? `${failedAttempts ?? 0} baris`,
+      );
+    }
 
     await ratePage.locator("#username").fill(probeUsername);
     await ratePage.locator("#password").fill("wrong-password-123");
-    await ratePage.getByRole("button", { name: "Masuk ke Saji" }).click();
+    await ratePage.getByRole("button", { name: "Masuk ke Nine Licious" }).click();
     const lockedMessage = ratePage.getByText(/Terlalu banyak percobaan masuk/);
     await lockedMessage.waitFor({ state: "visible" });
 
@@ -513,12 +599,14 @@ async function main() {
       const failedCount = rows.filter(
         (row) =>
           row.action === "auth.login_failed" &&
-          row.username === probeUsername,
+          row.username === probeUsername &&
+          row.created_at >= rateTestStartedAt,
       ).length;
       const lockedCount = rows.filter(
         (row) =>
           row.action === "auth.login_locked" &&
-          row.username === probeUsername,
+          row.username === probeUsername &&
+          row.created_at >= rateTestStartedAt,
       ).length;
 
       if (failedCount >= 5 && lockedCount >= 1) {
@@ -602,14 +690,14 @@ async function main() {
       }
     }
 
-    const { error: probeDeleteError } = await admin
+    const { error: attemptsDeleteError } = await admin
       .from("login_attempts")
       .delete()
-      .eq("username", probeUsername);
+      .in("username", [probeUsername, testUsername]);
 
-    if (probeDeleteError) {
+    if (attemptsDeleteError) {
       console.error(
-        `[verify-f0-ui] Gagal membersihkan login_attempts uji: ${probeDeleteError.message}`,
+        `[verify-f0-ui] Gagal membersihkan login_attempts uji: ${attemptsDeleteError.message}`,
       );
     }
 

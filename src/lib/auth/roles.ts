@@ -9,7 +9,7 @@ export const ROLE_LABELS: Record<UserRole, string> = {
 };
 
 export const ROLE_DESCRIPTIONS: Record<UserRole, string> = {
-  admin: "Akses penuh ke seluruh modul Saji.",
+  admin: "Akses penuh ke seluruh modul Nine Licious.",
   kasir: "Transaksi, meja, pembayaran, dan shift.",
   kitchen: "Antrean pesanan dan status masak.",
 };
@@ -76,9 +76,9 @@ export function safeNextPath(
   }
 
   try {
-    const parsed = new URL(next, "http://saji.local");
+    const parsed = new URL(next, "http://nine-licious.local");
 
-    if (parsed.origin !== "http://saji.local") {
+    if (parsed.origin !== "http://nine-licious.local") {
       return fallback;
     }
 

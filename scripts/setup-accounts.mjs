@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Setup akun awal Saji POS: 1 admin, 2 kasir, dan 2 kitchen staff.
+ * Setup akun awal Nine Licious: 1 admin, 2 kasir, dan 2 kitchen staff.
  *
  * Script ini memakai Supabase Auth Admin API dan tabel profiles. Sifatnya
  * idempoten:

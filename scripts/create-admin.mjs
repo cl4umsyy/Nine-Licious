@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Bootstrap admin pertama Saji POS.
+ * Bootstrap admin pertama Nine Licious.
  *
  * Script ini operasional: tidak membuat akun contoh dan tidak membuat data
  * transaksi. Jalankan setelah migrasi F0 selesai.

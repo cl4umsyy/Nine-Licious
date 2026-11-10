@@ -30,7 +30,7 @@ function getIpSalt(): string {
   return (
     process.env.AUDIT_IP_SALT ??
     process.env.SUPABASE_SERVICE_ROLE_KEY ??
-    "saji-local-development"
+    "nine-licious-local-development"
   );
 }
 

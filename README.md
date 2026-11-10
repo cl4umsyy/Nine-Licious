@@ -1,13 +1,13 @@
-# Saji POS
+# Nine Licious
 
-Aplikasi point of sale restoran **Saji** — pesanan, pembayaran, dapur, stok,
+Aplikasi point of sale restoran **Nine Licious** — pesanan, pembayaran, dapur, stok,
 shift, laporan, dan audit dalam satu sistem. Antarmuka sepenuhnya berbahasa
 Indonesia, mode terang, dengan identitas visual teal tua dan terracotta.
 
 Status saat ini: **F0 — Fondasi & Autentikasi**. Modul transaksi, pembayaran,
 dapur, stok, shift, dan laporan dikerjakan pada fase berikutnya sesuai PRD.
 
-Saji adalah aplikasi operasional, bukan aplikasi simulasi. Tidak ada mode
+Nine Licious adalah aplikasi operasional, bukan aplikasi simulasi. Tidak ada mode
 khusus pengujian, akun contoh, atau data contoh yang dibuat otomatis.
 
 ---
@@ -38,7 +38,7 @@ lembut, tanpa gradien berlebihan, glassmorphism, atau animasi yang tidak perlu.
 - Akun Midtrans Sandbox untuk development dan Midtrans Production untuk
   transaksi nyata
 
-> Saji memakai satu project Supabase sebagai database utama. File environment
+> Nine Licious memakai satu project Supabase sebagai database utama. File environment
 > development dan production memisahkan konfigurasi aplikasi, bukan membuat
 > database terpisah. Jangan membuat transaksi atau data pelanggan palsu di
 > production.
@@ -57,9 +57,8 @@ npm install
 
 Development:
 
-```powershell
-Copy-Item .env.development.example .env.development.local
-```
+Buat `.env.local` di root project, lalu isi nilainya dari project Supabase
+utama. File ini tidak di-commit.
 
 Production:
 
@@ -70,7 +69,6 @@ Copy-Item .env.production.example .env.production.local
 Linux/macOS:
 
 ```bash
-cp .env.development.example .env.development.local
 cp .env.production.example .env.production.local
 ```
 
@@ -86,9 +84,9 @@ SUPABASE_SERVICE_ROLE_KEY=...
 `NEXT_PUBLIC_` pada kunci ini dan jangan mengirimnya ke browser.
 
 Next.js memuat environment dengan urutan `.env.$(NODE_ENV).local` →
-`.env.local` → `.env.$(NODE_ENV)` → `.env`. `next dev` memakai
-`.env.development.local`; `next build` dan `next start` memakai
-`.env.production.local`. Nilai `NEXT_PUBLIC_*` dibekukan saat build, jadi build
+`.env.local` → `.env.$(NODE_ENV)` → `.env`. Development memakai `.env.local`;
+build dan start production dapat memakai `.env.production.local` yang menimpa
+nilai dari `.env.local`. Nilai `NEXT_PUBLIC_*` dibekukan saat build, jadi build
 ulang setelah mengubahnya.
 
 ### 3.3 Jalankan migrasi database
@@ -118,59 +116,62 @@ supabase link --project-ref <project-ref>
 supabase db push
 ```
 
-### 3.4 Buat admin pertama
+### 3.4 Buat lima akun awal
 
-Admin pertama dibuat lewat script operasional dengan kredensial eksplisit.
-Tidak ada username atau password bawaan.
+F0 memakai lima akun operasional: 1 admin, 2 kasir, dan 2 kitchen staff. Semua
+akun dibuat lewat Supabase Auth Admin API dan terhubung ke tabel `profiles`.
+Tidak ada username atau password bawaan di kode.
 
-PowerShell (development):
+1. Salin template kredensial setup:
 
-```powershell
-$env:ADMIN_USERNAME="pemilik"
-$env:ADMIN_FULL_NAME="Nama Pemilik"
-$env:ADMIN_PASSWORD="PasswordKuat123"
-npm run create:admin
-```
+   ```powershell
+   Copy-Item .env.setup.example .env.setup.local
+   ```
 
-Bash (development):
+   Linux/macOS:
 
-```bash
-ADMIN_USERNAME=pemilik \
-ADMIN_FULL_NAME="Nama Pemilik" \
-ADMIN_PASSWORD="PasswordKuat123" \
-npm run create:admin
-```
+   ```bash
+   cp .env.setup.example .env.setup.local
+   ```
 
-Production memakai file `.env.production.local`:
+2. Isi `SETUP_ADMIN_*`, `SETUP_KASIR1_*`, `SETUP_KASIR2_*`,
+   `SETUP_KITCHEN1_*`, dan `SETUP_KITCHEN2_*` di `.env.setup.local`.
+   File ini hanya dibaca oleh `npm run setup:accounts`, bukan oleh aplikasi
+   Next.js. Jangan commit file tersebut.
 
-```powershell
-$env:ADMIN_USERNAME="pemilik"
-$env:ADMIN_FULL_NAME="Nama Pemilik"
-$env:ADMIN_PASSWORD="PasswordKuat123"
-npm run create:admin -- production
-```
+3. Jalankan setup:
 
-Gunakan argumen posisional `production`, bukan `--production`, karena npm
-memakai flag tersebut untuk konfigurasinya sendiri.
+   ```bash
+   npm run setup:accounts
+   ```
 
-Karena development dan production memakai satu project utama, akun admin yang
-sama berlaku di kedua lingkungan. Bootstrap cukup dijalankan sekali; perintah
-production dipakai saat bootstrap pertama langsung dari server production atau
-saat memutar password admin.
+   Production:
 
-Script akan:
+   ```bash
+   npm run setup:accounts -- production
+   ```
 
-- memvalidasi username, nama, dan password,
-- membuat akun auth dengan email sintetis `username@saji.app`,
-- menetapkan peran `admin` di `app_metadata` dan `profiles`,
-- menulis audit log `admin.bootstrap`.
+   Gunakan argumen posisional `production`, bukan `--production`, karena npm
+   memakai flag tersebut untuk konfigurasinya sendiri.
 
-Menjalankan ulang script dengan username yang sama akan memperbarui password
-dan profil admin tersebut. Hapus variabel `ADMIN_PASSWORD` dari shell setelah
-selesai.
+Sifat script setup:
 
-Setelah admin pertama ada, akun kasir dan staf dapur dibuat oleh admin melalui
-menu **Pengguna**. Tidak ada pendaftaran mandiri.
+- **idempoten** — akun yang sudah ada dilewati, tidak dibuat duplikat;
+- **tidak mengubah akun existing** — role atau status yang tidak sesuai
+  dilaporkan `FAIL`, bukan diubah diam-diam;
+- melengkapi profil yang hilang untuk auth user yang sudah ada;
+- memastikan UUID auth sama dengan `profiles.id`, role tersimpan di
+  `profiles.role` dan `app_metadata.role`, email terkonfirmasi, dan akun aktif;
+- menulis audit log `accounts.bootstrap`;
+- tidak pernah menampilkan password di log.
+
+Menjalankan ulang `npm run setup:accounts` aman dan tidak menghapus akun.
+Setelah lima akun awal ada, staf berikutnya dibuat admin melalui menu
+**Pengguna**. Tidak ada pendaftaran mandiri.
+
+`npm run create:admin` tetap tersedia untuk bootstrap admin manual dengan
+variabel `ADMIN_USERNAME`, `ADMIN_FULL_NAME`, dan `ADMIN_PASSWORD`. Untuk setup
+awal lima akun, gunakan `npm run setup:accounts`.
 
 ### 3.5 Jalankan aplikasi
 
@@ -208,7 +209,9 @@ dan menampilkan instruksi konfigurasi, bukan crash.
 | `/unauthorized` | ✓ | ✓ | ✓ | — |
 
 - Login memakai username, bukan email. Di balik layar, username dipetakan ke
-  email sintetis `username@saji.app`.
+  email sintetis `username@saji.app`. Domain ini adalah identifier internal
+  yang dipertahankan agar akun yang sudah ada tetap dapat login; bukan branding
+  yang ditampilkan ke pengguna.
 - Peran disimpan di `profiles` dan dicerminkan ke `app_metadata` untuk
   pengecekan cepat di proxy. Server tetap memakai `profiles` sebagai sumber
   kebenaran.
@@ -218,6 +221,20 @@ dan menampilkan instruksi konfigurasi, bukan crash.
 - Lima kegagalan login dalam 15 menit memicu lockout 15 menit, dihitung per
   username dan per IP (IP disimpan sebagai hash).
 - Pesan error login sengaja generik agar tidak membocorkan username yang valid.
+
+### Akun awal F0
+
+| Label | Role | Sumber kredensial |
+| --- | --- | --- |
+| Admin | `admin` | `SETUP_ADMIN_*` |
+| Kasir 1 | `kasir` | `SETUP_KASIR1_*` |
+| Kasir 2 | `kasir` | `SETUP_KASIR2_*` |
+| Kitchen 1 | `kitchen` | `SETUP_KITCHEN1_*` |
+| Kitchen 2 | `kitchen` | `SETUP_KITCHEN2_*` |
+
+Username pada tabel adalah contoh; nilai sebenarnya berasal dari
+`.env.setup.local` atau environment shell. Password dibuat acak saat setup dan
+hanya disimpan di file setup lokal, bukan di repository.
 
 ### Pengelolaan pengguna
 
@@ -302,7 +319,7 @@ src/
     login/                 # Login + mode setup
     queue/                 # Papan antrean publik
     layout.tsx             # Root layout, font, Toaster
-    globals.css            # Design token Saji
+    globals.css            # Design token Nine Licious
   components/
     admin/user-management.tsx
     auth/                  # Login form & setup notice
@@ -319,7 +336,11 @@ src/
     navigation.ts
   proxy.ts                 # Refresh sesi, guard rute, idle timeout
 supabase/migrations/       # Skema F0
-scripts/create-admin.mjs   # Bootstrap admin pertama
+scripts/
+  setup-accounts.mjs       # Setup 5 akun awal (idempoten)
+  create-admin.mjs         # Bootstrap admin manual
+  verify-f0.mjs            # Verifikasi akun, login, RLS, audit
+  verify-f0-ui.mjs         # Verifikasi UI, redirect, rate limit, pengguna
 ```
 
 ---
@@ -333,7 +354,9 @@ scripts/create-admin.mjs   # Bootstrap admin pertama
 | `npm run start` | Menjalankan hasil build |
 | `npm run lint` | ESLint |
 | `npm run typecheck` | Pemeriksaan TypeScript |
-| `npm run create:admin` | Membuat/memperbarui admin pertama |
+| `npm run setup:accounts` | Membuat 5 akun awal secara idempoten |
+| `npm run setup:accounts -- production` | Setup akun memakai env production |
+| `npm run create:admin` | Membuat/memperbarui admin manual |
 | `npm run create:admin -- production` | Bootstrap admin memakai env production |
 
 Verifikasi statis F0:
@@ -361,11 +384,11 @@ Editor project yang benar, lalu coba lagi.
 ### "Profil akun tidak ditemukan atau tidak aktif"
 
 Akun auth ada tetapi profilnya tidak ada/nonaktif. Jalankan ulang
-`npm run create:admin` untuk admin, atau buat ulang pengguna dari menu
-**Pengguna** sebagai admin. Pastikan trigger `on_auth_user_created` berhasil
-dibuat.
+`npm run setup:accounts` untuk melengkapi profil akun awal yang hilang, atau
+buat ulang pengguna dari menu **Pengguna** sebagai admin. Pastikan trigger
+`on_auth_user_created` berhasil dibuat.
 
-### "Saji belum terhubung ke Supabase" / mode setup
+### "Nine Licious belum terhubung ke Supabase" / mode setup
 
 Periksa file environment yang sedang dipakai:
 
@@ -380,7 +403,8 @@ setelah mengubah `NEXT_PUBLIC_*`.
 
 ### Sesi langsung berakhir
 
-Periksa `SESSION_IDLE_MINUTES`. Cookie `saji_last_seen` diperbarui pada setiap
+Periksa `SESSION_IDLE_MINUTES`. Cookie `saji_last_seen` (nama teknis
+dipertahankan agar sesi yang sudah ada tetap kompatibel) diperbarui pada setiap
 permintaan halaman/aksi. Menghapus cookie atau mengganti `SESSION_IDLE_MINUTES`
 dapat memengaruhi perilaku sesi.
 
@@ -422,8 +446,9 @@ sebelum fase berikutnya dimulai.
 - Gunakan Server Actions untuk mutasi; jangan memanggil service role dari Client
   Component.
 - Jangan menambahkan data pelanggan atau keuangan ke `/queue`.
-- Jangan membuat akun, transaksi, atau data contoh. Gunakan `create:admin` untuk
-  admin pertama dan menu **Pengguna** untuk staf berikutnya.
+- Jangan membuat akun, transaksi, atau data contoh. Gunakan
+  `npm run setup:accounts` untuk lima akun awal dan menu **Pengguna** untuk staf
+  berikutnya.
 - Sebelum deploy production: backup database, tinjau migrasi, isi
   `.env.production.local`, build ulang, dan bootstrap admin production secara
   eksplisit.

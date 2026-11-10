@@ -136,7 +136,7 @@ export function AppShell({ profile, environment, children }: AppShellProps) {
   const meta = pageMetaForPath(pathname);
   const title =
     meta?.label ??
-    (pathname === "/unauthorized" ? "Akses dibatasi" : "Saji POS");
+    (pathname === "/unauthorized" ? "Akses dibatasi" : "Nine Licious");
 
   return (
     <div className="min-h-dvh bg-background lg:grid lg:grid-cols-[16rem_1fr]">
@@ -163,7 +163,7 @@ export function AppShell({ profile, environment, children }: AppShellProps) {
               showCloseButton={false}
             >
               <SheetHeader className="sr-only">
-                <SheetTitle>Menu Saji POS</SheetTitle>
+                <SheetTitle>Menu Nine Licious</SheetTitle>
                 <SheetDescription>Navigasi utama aplikasi.</SheetDescription>
               </SheetHeader>
               <SidebarContent
@@ -178,7 +178,7 @@ export function AppShell({ profile, environment, children }: AppShellProps) {
               {title}
             </p>
             <p className="hidden text-[0.7rem] text-muted-foreground sm:block">
-              {meta?.description ?? "Saji POS"}
+              {meta?.description ?? "Nine Licious"}
             </p>
           </div>
 

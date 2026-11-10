@@ -12,7 +12,7 @@ const STEPS = [
   {
     icon: KeyRound,
     title: "Siapkan environment",
-    body: "Salin .env.development.example menjadi .env.development.local untuk development, atau .env.production.example menjadi .env.production.local untuk production. Isi URL, anon key, dan service role key dari project Supabase utama.",
+    body: "Buat .env.local untuk development, atau salin .env.production.example menjadi .env.production.local untuk production. Isi URL, anon key, dan service role key dari project Supabase utama.",
   },
   {
     icon: Database,
@@ -21,8 +21,8 @@ const STEPS = [
   },
   {
     icon: Terminal,
-    title: "Buat admin pertama",
-    body: "Jalankan npm run create:admin dengan ADMIN_USERNAME, ADMIN_FULL_NAME, dan ADMIN_PASSWORD. Tidak ada akun default atau password bawaan.",
+    title: "Buat akun awal",
+    body: "Salin .env.setup.example menjadi .env.setup.local, isi kredensial lima akun awal, lalu jalankan npm run setup:accounts. Tidak ada akun default atau password bawaan.",
   },
   {
     icon: ShieldCheck,
@@ -35,7 +35,7 @@ export function SetupNotice() {
   return (
     <Card className="border-warning/30 bg-warning/[0.035]">
       <CardHeader>
-        <CardTitle className="text-lg">Saji belum terhubung ke Supabase</CardTitle>
+        <CardTitle className="text-lg">Nine Licious belum terhubung ke Supabase</CardTitle>
         <CardDescription>
           Aplikasi berjalan dalam mode setup. Ikuti langkah berikut untuk
           mengaktifkan autentikasi dan data restoran.
@@ -46,7 +46,7 @@ export function SetupNotice() {
           <Database />
           <AlertTitle>Project Supabase utama diperlukan</AlertTitle>
           <AlertDescription>
-            Saji memakai satu project Supabase sebagai database utama. Pisahkan
+            Nine Licious memakai satu project Supabase sebagai database utama. Pisahkan
             file environment development dan production, dan jangan menjalankan
             operasi destruktif tanpa backup.
           </AlertDescription>
@@ -73,7 +73,7 @@ export function SetupNotice() {
 
         <div className="rounded-lg bg-primary/95 p-3 font-mono text-[0.7rem] leading-relaxed text-primary-foreground">
           <p className="text-primary-foreground/60"># setelah environment terisi</p>
-          <p>npm run create:admin</p>
+          <p>npm run setup:accounts</p>
           <p>npm run dev</p>
         </div>
 

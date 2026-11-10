@@ -1,5 +1,5 @@
 -- ---------------------------------------------------------------------------
--- Saji POS - F0 foundation
+-- Nine Licious - F0 foundation
 -- Jalankan file ini di Supabase SQL Editor pada project Supabase utama.
 -- Backup database dan tinjau perubahan sebelum menjalankannya di production.
 -- ---------------------------------------------------------------------------
@@ -34,7 +34,7 @@ create index if not exists profiles_role_active_idx
 -- ---------------------------------------------------------------------------
 create table if not exists public.restaurant_settings (
   id integer primary key default 1,
-  name text not null default 'Saji',
+  name text not null default 'Nine Licious',
   logo_url text,
   address text,
   phone text,
@@ -58,7 +58,7 @@ create table if not exists public.restaurant_settings (
 );
 
 insert into public.restaurant_settings (id, name)
-values (1, 'Saji')
+values (1, 'Nine Licious')
 on conflict (id) do nothing;
 
 -- ---------------------------------------------------------------------------

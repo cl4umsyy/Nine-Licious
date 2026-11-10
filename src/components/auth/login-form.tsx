@@ -96,7 +96,7 @@ export function LoginForm({ next }: LoginFormProps) {
               Memeriksa akun...
             </>
           ) : (
-            "Masuk ke Saji"
+            "Masuk ke Nine Licious"
           )}
         </Button>
       </form>

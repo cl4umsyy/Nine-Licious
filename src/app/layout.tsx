@@ -17,13 +17,13 @@ const display = Fraunces({
 });
 
 export const metadata: Metadata = {
-  applicationName: "Saji POS",
+  applicationName: "Nine Licious",
   title: {
-    default: "Saji POS",
-    template: "%s · Saji",
+    default: "Nine Licious",
+    template: "%s · Nine Licious",
   },
   description:
-    "Sistem point of sale restoran Saji untuk pesanan, pembayaran, dapur, stok, dan laporan.",
+    "Sistem point of sale restoran Nine Licious untuk pesanan, pembayaran, dapur, stok, dan laporan.",
   icons: {
     icon: "/icon.svg",
   },

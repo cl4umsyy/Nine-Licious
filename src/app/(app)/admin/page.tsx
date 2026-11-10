@@ -136,7 +136,7 @@ export default async function AdminDashboardPage() {
       <PageHeader
         eyebrow="Ringkasan admin"
         title={`${greeting()}, ${firstName}`}
-        description={`${dateLabel} · ${settings?.name ?? "Saji"} · ${ROLE_LABELS[session.profile.role]}`}
+        description={`${dateLabel} · ${settings?.name ?? "Nine Licious"} · ${ROLE_LABELS[session.profile.role]}`}
         actions={
           <Button asChild variant="outline" size="sm">
             <Link href="/queue" target="_blank" rel="noreferrer">

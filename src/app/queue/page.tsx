@@ -69,7 +69,7 @@ export default function QueuePage() {
       </main>
 
       <footer className="border-t border-border px-4 py-4 text-center text-[0.65rem] text-muted-foreground sm:px-6">
-        Saji POS · Papan antrean publik · Waktu Indonesia Barat
+        Nine Licious · Papan antrean publik · Waktu Indonesia Barat
       </footer>
     </div>
   );

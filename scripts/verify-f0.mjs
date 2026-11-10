@@ -314,6 +314,24 @@ async function main() {
   }
 
   console.log("");
+  console.log("== Branding ==");
+
+  const { data: branding, error: brandingError } = await admin
+    .from("restaurant_settings")
+    .select("name")
+    .eq("id", 1)
+    .maybeSingle();
+
+  if (!brandingError && branding?.name === "Nine Licious") {
+    pass("Nama restoran", "Nine Licious");
+  } else {
+    fail(
+      "Nama restoran",
+      brandingError?.message ?? `name=${branding?.name ?? "-"}`,
+    );
+  }
+
+  console.log("");
   console.log("== Audit dan duplikasi ==");
 
   const { data: bootstrapAudits, error: bootstrapAuditError } = await admin

@@ -31,7 +31,7 @@ export default function GlobalError({
                 Terjadi kendala
               </CardTitle>
               <CardDescription>
-                Saji tidak dapat memuat halaman ini. Coba lagi; bila masalah
+                Nine Licious tidak dapat memuat halaman ini. Coba lagi; bila masalah
                 berlanjut, hubungi admin restoran.
               </CardDescription>
             </CardHeader>
