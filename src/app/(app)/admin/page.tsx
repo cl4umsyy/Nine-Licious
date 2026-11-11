@@ -12,6 +12,7 @@ import {
   ShoppingCart,
   UserPlus,
   Users,
+  UtensilsCrossed,
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -175,6 +176,12 @@ export default async function AdminDashboardPage() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <Button asChild variant="secondary" size="sm">
+              <Link href="/admin/menu">
+                <UtensilsCrossed />
+                Kelola menu
+              </Link>
+            </Button>
             <Button asChild variant="secondary" size="sm">
               <Link href="/admin/users">
                 <UserPlus />

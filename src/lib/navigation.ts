@@ -4,6 +4,7 @@ import {
   MonitorPlay,
   ShoppingCart,
   Users,
+  UtensilsCrossed,
   type LucideIcon,
 } from "lucide-react";
 import type { UserRole } from "@/lib/auth/roles";
@@ -23,6 +24,13 @@ export const NAV_ITEMS: NavItem[] = [
     label: "Ringkasan",
     description: "Kondisi sistem dan aktivitas hari ini.",
     icon: LayoutDashboard,
+    roles: ["admin"],
+  },
+  {
+    href: "/admin/menu",
+    label: "Menu",
+    description: "Kategori, produk, modifier, dan ketersediaan.",
+    icon: UtensilsCrossed,
     roles: ["admin"],
   },
   {

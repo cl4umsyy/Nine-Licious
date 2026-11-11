@@ -44,6 +44,9 @@ const testUsername = "f0.verify";
 const testFullName = "F0 Verifikasi";
 const testEmail = `${testUsername}@saji.app`;
 const probeUsername = "ratelimit.probe";
+const testRole = process.env.VERIFY_TEST_ROLE === "kitchen" ? "kitchen" : "kasir";
+const testHome = testRole === "kitchen" ? "/kitchen" : "/pos";
+const testRoleLabel = testRole === "kitchen" ? "Staf Dapur" : "Kasir";
 const initialTestPassword = `${randomBytes(24).toString("base64url")}a9`;
 const resetTestPassword = `${randomBytes(24).toString("base64url")}a9`;
 
@@ -261,13 +264,19 @@ async function main() {
     const createDialog = adminPage.getByRole("dialog");
     await createDialog.getByLabel("Nama lengkap").fill(testFullName);
     await createDialog.getByLabel("Username").fill(testUsername);
+
+    if (testRole === "kitchen") {
+      await createDialog.getByLabel("Peran").click();
+      await adminPage.getByRole("option", { name: testRoleLabel }).click();
+    }
+
     await createDialog.getByLabel("Password", { exact: true }).fill(initialTestPassword);
     await createDialog
       .getByLabel("Konfirmasi password")
       .fill(initialTestPassword);
     await createDialog.getByRole("button", { name: "Buat pengguna" }).click();
     await openUserRow(adminPage, testUsername);
-    pass("Admin membuat pengguna baru", testUsername);
+    pass("Admin membuat pengguna baru", `${testUsername} (${testRole})`);
 
     const { data: createdProfile } = await admin
       .from("profiles")
@@ -277,13 +286,13 @@ async function main() {
 
     if (
       createdProfile &&
-      createdProfile.role === "kasir" &&
+      createdProfile.role === testRole &&
       createdProfile.is_active === true
     ) {
       testUserId = createdProfile.id;
       pass(
         "Profil pengguna baru tersimpan",
-        `${createdProfile.id} | role=kasir`,
+        `${createdProfile.id} | role=${testRole}`,
       );
     } else {
       fail(
@@ -393,8 +402,8 @@ async function main() {
     reactivatedPage.setDefaultTimeout(30_000);
     reactivatedPage.setDefaultNavigationTimeout(60_000);
     await loginViaUi(reactivatedPage, testUsername, resetTestPassword);
-    await expectPath(reactivatedPage, "/pos");
-    pass("Login pengguna aktif setelah reaktivasi", "/pos");
+    await expectPath(reactivatedPage, testHome);
+    pass("Login pengguna aktif setelah reaktivasi", testHome);
     await logout(reactivatedPage);
     await reactivatedContext.close();
 
@@ -438,6 +447,10 @@ async function main() {
     await kasirPage.goto("/kitchen");
     await expectPath(kasirPage, "/unauthorized");
     pass("Kasir ditolak dari /kitchen", "/unauthorized");
+
+    await kasirPage.goto("/admin/users");
+    await expectPath(kasirPage, "/unauthorized");
+    pass("Kasir ditolak dari /admin/users", "/unauthorized");
     await logout(kasirPage);
     await kasirContext.close();
 
@@ -470,6 +483,10 @@ async function main() {
     await kitchenPage.goto("/admin");
     await expectPath(kitchenPage, "/unauthorized");
     pass("Kitchen ditolak dari /admin", "/unauthorized");
+
+    await kitchenPage.goto("/admin/users");
+    await expectPath(kitchenPage, "/unauthorized");
+    pass("Kitchen ditolak dari /admin/users", "/unauthorized");
     await logout(kitchenPage);
     await kitchenContext.close();
 
