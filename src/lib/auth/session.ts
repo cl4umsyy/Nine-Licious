@@ -133,6 +133,33 @@ export async function getAdminActor(): Promise<
   return { ok: true, session: state };
 }
 
+/**
+ * Server action friendly cashier or admin check. Returns a result instead of
+ * redirecting so the caller can render a friendly error state.
+ */
+export async function getCashierActor(): Promise<
+  | { ok: true; session: AuthenticatedSession }
+  | { ok: false; message: string }
+> {
+  const state = await getSessionState();
+
+  if (state.status !== "authenticated") {
+    return {
+      ok: false,
+      message: "Sesi Anda tidak valid. Silakan masuk kembali.",
+    };
+  }
+
+  if (state.profile.role !== "admin" && state.profile.role !== "kasir") {
+    return {
+      ok: false,
+      message: "Hanya admin dan kasir yang dapat melakukan tindakan ini.",
+    };
+  }
+
+  return { ok: true, session: state };
+}
+
 export function isRoleAllowed(
   role: UserRole,
   allowed: UserRole | UserRole[],

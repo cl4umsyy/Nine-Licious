@@ -145,3 +145,97 @@ export type FloorPlan = {
   created_at: string;
   updated_at: string;
 };
+
+export type OrderType = "dine_in" | "takeaway";
+
+export type OrderStatus =
+  | "awaiting_payment"
+  | "partially_paid"
+  | "paid"
+  | "completed"
+  | "cancelled"
+  | "refunded";
+
+export type PaymentStatus =
+  | "unpaid"
+  | "partially_paid"
+  | "paid"
+  | "partially_refunded"
+  | "refunded";
+
+export type KdsStatus = "queued" | "preparing" | "ready";
+
+export type DiningSessionStatus = "open" | "closed" | "cancelled";
+
+export type DiningSession = {
+  id: string;
+  table_id: string;
+  status: DiningSessionStatus;
+  opened_at: string;
+  closed_at: string | null;
+  opened_by: string | null;
+  closed_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Order = {
+  id: string;
+  order_number: string;
+  order_type: OrderType;
+  table_id: string | null;
+  dining_session_id: string | null;
+  status: OrderStatus;
+  payment_status: PaymentStatus;
+  kds_status: KdsStatus | null;
+  customer_name: string | null;
+  subtotal: number;
+  discount_product_total: number;
+  discount_order_total: number;
+  discount_manual_total: number;
+  discount_total: number;
+  tax_percent: number;
+  tax_total: number;
+  service_charge_percent: number;
+  service_total: number;
+  grand_total: number;
+  paid_total: number;
+  idempotency_key: string | null;
+  business_date: string;
+  created_by: string | null;
+  cancelled_by: string | null;
+  cancelled_at: string | null;
+  cancel_reason: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OrderItem = {
+  id: string;
+  order_id: string;
+  product_id: string;
+  product_name_snapshot: string;
+  product_sku_snapshot: string | null;
+  unit_price_snapshot: number;
+  quantity: number;
+  notes: string | null;
+  modifier_total: number;
+  subtotal: number;
+  discount_amount: number;
+  line_total: number;
+  kitchen_station: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OrderItemModifier = {
+  id: string;
+  order_item_id: string;
+  modifier_option_id: string;
+  group_name_snapshot: string;
+  option_name_snapshot: string;
+  price_delta_snapshot: number;
+  created_at: string;
+};
+
