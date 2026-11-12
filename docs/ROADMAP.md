@@ -777,7 +777,7 @@ Aturan gate:
 | Fase | File usulan | Status |
 | --- | --- | --- |
 | F0 | `20261110000100_foundation.sql` | **Ada dan sudah dijalankan** |
-| F1.1 | `20261111000100_menu_master.sql` | Belum dibuat |
+| F1.1 | `20261111000100_menu_master.sql` | **Ada, belum dijalankan** |
 | F1.2 | `20261111000200_tables_layout.sql` | Belum dibuat |
 | F1.3 | `20261111000300_orders_pos.sql` | Belum dibuat |
 | F1.4 | `20261111000400_discounts.sql` | Belum dibuat |
@@ -805,9 +805,9 @@ Setiap migrasi wajib:
 | Auth, role, sesi, rate limit | F0 | Selesai |
 | Manajemen pengguna dan audit | F0 | Selesai |
 | Reset password admin | F0 | Selesai |
-| Menu, kategori, produk | F1.1 | Rencana |
-| Modifier dan harga | F1.1 | Rencana |
-| Foto produk dan ketersediaan | F1.1 | Rencana |
+| Menu, kategori, produk | F1.1 | Implementasi selesai; menunggu migration |
+| Modifier dan harga | F1.1 | Implementasi selesai; menunggu migration |
+| Foto produk dan ketersediaan | F1.1 | Implementasi selesai; menunggu migration |
 | Editor denah meja drag-and-drop: posisi, kapasitas, zona | F1.2 | **Wajib** |
 | Zona meja dan layout terbit | F1.2 | **Wajib** |
 | Denah merender tiga status meja | F1.2 | **Wajib** |

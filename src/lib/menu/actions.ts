@@ -57,6 +57,7 @@ type ModifierGroupRow = {
   is_required: boolean;
   min_select: number;
   max_select: number;
+  sort_order: number;
   is_active: boolean;
 };
 
@@ -164,6 +165,16 @@ async function writeAudit(
     entityId,
     details,
   });
+}
+
+function isFileEntry(value: FormDataEntryValue | null): value is File {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "arrayBuffer" in value &&
+    "size" in value &&
+    "type" in value
+  );
 }
 
 function matchesImageSignature(
@@ -623,7 +634,7 @@ async function validateModifierGroupsForProduct(
   const { data, error } = await supabase
     .from("modifier_groups")
     .select(
-      "id, name, selection_type, is_required, min_select, max_select, is_active, modifier_options(id, is_active)",
+      "id, name, selection_type, is_required, min_select, max_select, sort_order, is_active, modifier_options(id, is_active)",
     )
     .in("id", groupIds);
 
@@ -746,7 +757,7 @@ export async function saveProductAction(
 
   const photoEntry = formData.get("photo");
   const photoFile =
-    photoEntry instanceof File && photoEntry.size > 0 ? photoEntry : null;
+    isFileEntry(photoEntry) && photoEntry.size > 0 ? photoEntry : null;
   const removePhoto = formBoolean(formData.get("removePhoto"));
   const targetProductId = productId ?? randomUUID();
   let uploadedPath: string | null = null;
@@ -1123,7 +1134,9 @@ export async function saveModifierGroupAction(
   if (groupId) {
     const { data: existing, error: existingError } = await context.supabase
       .from("modifier_groups")
-      .select("id, name, selection_type, is_required, min_select, max_select, is_active")
+      .select(
+        "id, name, selection_type, is_required, min_select, max_select, sort_order, is_active",
+      )
       .eq("id", groupId)
       .maybeSingle<ModifierGroupRow>();
 
@@ -1156,7 +1169,9 @@ export async function saveModifierGroupAction(
       .from("modifier_groups")
       .update(payload)
       .eq("id", groupId)
-      .select("id, name, selection_type, is_required, min_select, max_select, is_active")
+      .select(
+        "id, name, selection_type, is_required, min_select, max_select, sort_order, is_active",
+      )
       .maybeSingle<ModifierGroupRow>();
 
     if (error) {
@@ -1190,7 +1205,9 @@ export async function saveModifierGroupAction(
   const { data, error } = await context.supabase
     .from("modifier_groups")
     .insert(payload)
-    .select("id, name, selection_type, is_required, min_select, max_select, is_active")
+    .select(
+      "id, name, selection_type, is_required, min_select, max_select, sort_order, is_active",
+    )
     .single<ModifierGroupRow>();
 
   if (error) {
@@ -1350,7 +1367,9 @@ export async function saveModifierOptionAction(
 
   const { data: group, error: groupError } = await context.supabase
     .from("modifier_groups")
-    .select("id, name, selection_type, is_required, min_select, max_select, is_active")
+    .select(
+        "id, name, selection_type, is_required, min_select, max_select, sort_order, is_active",
+      )
     .eq("id", parsed.data.groupId)
     .maybeSingle<ModifierGroupRow>();
 
@@ -1392,6 +1411,10 @@ export async function saveModifierOptionAction(
 
     if (!existing) {
       return errorState("Opsi modifier tidak ditemukan.");
+    }
+
+    if (existing.group_id !== parsed.data.groupId) {
+      return errorState("Opsi tidak dapat dipindahkan ke grup lain.");
     }
 
     if (
@@ -1508,7 +1531,9 @@ export async function setModifierOptionActiveAction(
   if (existing.is_active && !isActive) {
     const { data: group } = await context.supabase
       .from("modifier_groups")
-      .select("id, name, selection_type, is_required, min_select, max_select, is_active")
+      .select(
+        "id, name, selection_type, is_required, min_select, max_select, sort_order, is_active",
+      )
       .eq("id", existing.group_id)
       .maybeSingle<ModifierGroupRow>();
 
@@ -1591,7 +1616,9 @@ export async function deleteModifierOptionAction(
   if (existing.is_active) {
     const { data: group } = await context.supabase
       .from("modifier_groups")
-      .select("id, name, selection_type, is_required, min_select, max_select, is_active")
+      .select(
+        "id, name, selection_type, is_required, min_select, max_select, sort_order, is_active",
+      )
       .eq("id", existing.group_id)
       .maybeSingle<ModifierGroupRow>();
 

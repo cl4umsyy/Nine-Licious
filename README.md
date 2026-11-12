@@ -6,9 +6,10 @@ Indonesia, mode terang, dengan identitas visual teal tua dan terracotta.
 
 Status saat ini: **F0 — Fondasi & Autentikasi selesai**. F1 — Menu, meja, dan POS
 dipecah menjadi **F1.1 Menu & Master Data**, **F1.2 Meja & Denah**, **F1.3 POS
-Core, Kunjungan & Pesanan**, dan **F1.4 Diskon & Finalisasi**. F1.1 adalah
-milestone berikutnya. Modul pembayaran, dapur, stok, shift, dan laporan
-dikerjakan setelahnya sesuai roadmap.
+Core, Kunjungan & Pesanan**, dan **F1.4 Diskon & Finalisasi**. Implementasi kode
+F1.1 sudah tersedia dan menunggu migration serta pengujian runtime. Modul
+pembayaran, dapur, stok, shift, dan laporan dikerjakan setelahnya sesuai
+roadmap.
 
 Dokumen acuan:
 
@@ -164,13 +165,15 @@ ulang setelah mengubahnya.
 
 ### 3.3 Jalankan migrasi database
 
-Buka **Supabase Dashboard → SQL Editor** pada project utama, lalu jalankan isi:
+Buka **Supabase Dashboard → SQL Editor** pada project utama, lalu jalankan isi
+migration secara berurutan:
 
 ```text
 supabase/migrations/20261110000100_foundation.sql
+supabase/migrations/20261111000100_menu_master.sql
 ```
 
-Migrasi membuat:
+Migration F0 membuat:
 
 - `profiles` — profil staf, peran, status aktif
 - `restaurant_settings` — nama restoran, pajak, service charge, struk
@@ -182,11 +185,19 @@ Migrasi membuat:
 
 Migrasi tidak membuat akun atau transaksi contoh.
 
-Skema F0 ini belum mencakup menu, modifier, zona/meja, kunjungan dine-in,
-pesanan, diskon, pembayaran, split bill, KDS, antrean, atau notifikasi dapur.
-Tabel tersebut ditambahkan pada F1–F3 sesuai
-[`docs/ROADMAP.md`](docs/ROADMAP.md); lihat juga analisis kesiapan database di
-[`docs/PRD.md`](docs/PRD.md).
+Migration F1.1 membuat:
+
+- `menu_categories` — kategori menu dan seed Food/Drinks/Desserts/Packages
+- `products` — harga rupiah, foto, ketersediaan, dan stasiun dapur
+- `modifier_groups` dan `modifier_options` — grup/opsi modifier
+- `product_modifier_groups` — relasi many-to-many produk dan modifier
+- RLS, grant, index, trigger `updated_at`, serta bucket/policy foto
+  `product-photos`
+
+Skema saat ini belum mencakup zona/meja, kunjungan dine-in, pesanan, diskon,
+pembayaran, split bill, KDS, antrean, atau notifikasi dapur. Tabel tersebut
+ditambahkan pada F1.2–F3 sesuai [`docs/ROADMAP.md`](docs/ROADMAP.md); lihat juga
+analisis kesiapan database di [`docs/PRD.md`](docs/PRD.md).
 
 Bila memakai Supabase CLI:
 
@@ -622,8 +633,8 @@ kondisi berhasil/gagal/pembatalan, dan perpindahan data antar modul ada di
 | Fase | Cakupan | Status |
 | --- | --- | --- |
 | **F0** | Fondasi Next.js, design system, auth, peran, audit, pengguna, reset admin | **Selesai** |
-| **F1** | Fase induk menu, meja, dan POS; dipecah menjadi F1.1–F1.4 | **Berikutnya** |
-| **F1.1** | Menu & Master Data: kategori, produk, modifier, foto, ketersediaan | **Berikutnya** |
+| **F1** | Fase induk menu, meja, dan POS; dipecah menjadi F1.1–F1.4 | **Berjalan** |
+| **F1.1** | Menu & Master Data: kategori, produk, modifier, foto, ketersediaan | **Implementasi selesai; menunggu migration & uji runtime** |
 | **F1.2** | Meja & Denah: zona, meja, editor drag-and-drop, denah tiga status | Rencana |
 | **F1.3** | POS Core, Kunjungan & Pesanan: POS dua bagian, keranjang, dine-in/takeaway, pesanan menunggu pembayaran, pembatalan, handoff pembayaran | Rencana |
 | **F1.4** | Diskon & Finalisasi: diskon produk/pesanan/manual, approval admin, pajak/service, hardening | Rencana |

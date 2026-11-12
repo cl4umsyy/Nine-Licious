@@ -35,6 +35,7 @@ export function ProductPhoto({
         />
       ) : (
         <div
+          role="img"
           className="flex size-full items-center justify-center bg-[radial-gradient(circle_at_30%_20%,rgba(14,79,69,0.12),transparent_60%)] text-muted-foreground"
           aria-label={`${alt} belum memiliki foto`}
         >
