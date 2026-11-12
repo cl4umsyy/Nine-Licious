@@ -3,6 +3,7 @@ import {
   ArrowRight,
   ChefHat,
   CircleCheck,
+  MapPin,
   MonitorPlay,
   ReceiptText,
   ShoppingCart,
@@ -75,6 +76,16 @@ export default async function PosPage() {
                 </li>
               ))}
             </ul>
+
+            <div className="pt-2">
+              <Button asChild size="sm">
+                <Link href="/pos/floor">
+                  <MapPin className="size-4 mr-1.5" />
+                  Lihat Denah Meja
+                  <ArrowRight className="size-3.5 ml-1.5" />
+                </Link>
+              </Button>
+            </div>
           </CardContent>
         </Card>
 

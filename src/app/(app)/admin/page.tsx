@@ -5,6 +5,7 @@ import {
   CircleCheck,
   Clock3,
   Database,
+  MapPin,
   MonitorPlay,
   ReceiptText,
   Settings2,
@@ -180,6 +181,12 @@ export default async function AdminDashboardPage() {
               <Link href="/admin/menu">
                 <UtensilsCrossed />
                 Kelola menu
+              </Link>
+            </Button>
+            <Button asChild variant="secondary" size="sm">
+              <Link href="/admin/tables">
+                <MapPin />
+                Kelola meja & denah
               </Link>
             </Button>
             <Button asChild variant="secondary" size="sm">

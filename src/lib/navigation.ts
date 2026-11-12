@@ -1,6 +1,7 @@
 import {
   ChefHat,
   LayoutDashboard,
+  MapPin,
   MonitorPlay,
   ShoppingCart,
   Users,
@@ -31,6 +32,13 @@ export const NAV_ITEMS: NavItem[] = [
     label: "Menu",
     description: "Kategori, produk, modifier, dan ketersediaan.",
     icon: UtensilsCrossed,
+    roles: ["admin"],
+  },
+  {
+    href: "/admin/tables",
+    label: "Meja & Denah",
+    description: "Zona, nomor meja, kapasitas, dan layout denah.",
+    icon: MapPin,
     roles: ["admin"],
   },
   {

@@ -110,3 +110,38 @@ export type ProductModifierGroup = {
   sort_order: number;
   created_at: string;
 };
+
+export type TableShape = "rectangle" | "round";
+
+export type TableStatus = "empty" | "awaiting_payment" | "occupied";
+
+export type TableZone = {
+  id: string;
+  name: string;
+  sort_order: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DiningTable = {
+  id: string;
+  zone_id: string;
+  name: string;
+  capacity: number;
+  position_x: number;
+  position_y: number;
+  shape: TableShape;
+  status: TableStatus;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type FloorPlan = {
+  zone_id: string;
+  published_at: string | null;
+  published_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
