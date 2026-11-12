@@ -465,7 +465,7 @@ async function main() {
       const serviceDelta = Math.round((subtotalDelta * 5) / 100); // 800
       const grandTotalDelta = subtotalDelta + taxDelta + serviceDelta; // 18400
 
-      const { data: appendRes, error: appendErr } = await supabase.rpc(
+      const { error: appendErr } = await supabase.rpc(
         "append_order_items_atomic",
         {
           p_order_id: createdRes1.id,

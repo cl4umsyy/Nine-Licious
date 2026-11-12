@@ -12,7 +12,8 @@
     "reset:admin": "node scripts/reset-admin-password.mjs",
     "setup:accounts": "node scripts/setup-accounts.mjs",
     "verify:f1-2": "node scripts/verify-f1-2.mjs",
-    "verify:f1-3": "node scripts/verify-f1-3.mjs"
+    "verify:f1-3": "node scripts/verify-f1-3.mjs",
+    "verify:f1-4": "node scripts/verify-f1-4.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

@@ -202,6 +202,9 @@ export type Order = {
   paid_total: number;
   idempotency_key: string | null;
   business_date: string;
+  is_finalized: boolean;
+  finalized_at: string | null;
+  finalized_by: string | null;
   created_by: string | null;
   cancelled_by: string | null;
   cancelled_at: string | null;
@@ -238,4 +241,57 @@ export type OrderItemModifier = {
   price_delta_snapshot: number;
   created_at: string;
 };
+
+export type DiscountScope = "product" | "order" | "manual";
+
+export type DiscountType = "percentage" | "fixed";
+
+export type Discount = {
+  id: string;
+  name: string;
+  scope: "product" | "order";
+  discount_type: DiscountType;
+  discount_value: number;
+  applies_to_category_id: string | null;
+  applies_to_product_id: string | null;
+  min_order_amount: number;
+  max_discount_amount: number | null;
+  is_active: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DiscountApprovalNonce = {
+  id: string;
+  nonce: string;
+  approver_id: string;
+  cashier_id: string;
+  discount_type: DiscountType;
+  discount_value: number;
+  reason: string;
+  context_ref: string | null;
+  is_used: boolean;
+  used_at: string | null;
+  used_in_order_id: string | null;
+  expires_at: string;
+  created_at: string;
+};
+
+export type OrderDiscount = {
+  id: string;
+  order_id: string;
+  discount_id: string | null;
+  order_item_id: string | null;
+  scope: DiscountScope;
+  name: string;
+  discount_type: DiscountType;
+  discount_rate: number;
+  discount_amount: number;
+  reason: string | null;
+  approved_by: string | null;
+  approved_at: string | null;
+  created_at: string;
+};
+
 
