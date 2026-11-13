@@ -29,6 +29,7 @@ import type {
   ModifierGroup,
   ModifierOption,
   Order,
+  OrderDiscount,
   OrderItem,
   OrderItemModifier,
   Product,
@@ -112,11 +113,18 @@ async function fetchFullOrderDetails(
     modifiers: modifiersByItem.get(i.id) ?? [],
   }));
 
+  const { data: discountsData } = await supabase
+    .from("order_discounts")
+    .select("*")
+    .eq("order_id", orderId)
+    .order("created_at", { ascending: true });
+
   const { dining_tables, ...orderClean } = order;
 
   return {
     ...orderClean,
     items: itemsWithMods,
+    discounts: (discountsData ?? []) as OrderDiscount[],
     tableName: dining_tables?.name ?? tableNameFallback ?? null,
   };
 }
@@ -381,7 +389,7 @@ export async function createPosOrderAction(
   const totals = calculateCartTotals(cartItems, taxPercent, serviceChargePercent);
 
   // Siapkan payload atomic untuk RPC
-  const itemsPayload = cartItems.map((cItem) => {
+  const itemsPayload = cartItems.map((cItem, idx) => {
     const modifierTotal = cItem.modifiers.reduce(
       (sum, m) => sum + m.priceDelta,
       0,
@@ -389,6 +397,7 @@ export async function createPosOrderAction(
     const subtotal = (cItem.unitPrice + modifierTotal) * cItem.quantity;
 
     return {
+      client_item_id: input.items[idx]?.clientItemId || cItem.id,
       product_id: cItem.productId,
       product_name_snapshot: cItem.productName,
       product_sku_snapshot: cItem.productSku ?? null,
@@ -408,6 +417,18 @@ export async function createPosOrderAction(
     };
   });
 
+  const discountsPayload = (input.discounts ?? []).map((d) => ({
+    scope: d.scope,
+    client_item_id: d.clientItemId || null,
+    order_item_id: d.orderItemId || null,
+    discount_id: d.discountId || null,
+    name: d.name || null,
+    discount_type: d.discountType,
+    discount_rate: d.discountRate,
+    approval_nonce: d.approvalNonce || null,
+    reason: d.reason || null,
+  }));
+
   const orderPayload = {
     order_type: input.orderType,
     table_id: targetTableId,
@@ -422,12 +443,13 @@ export async function createPosOrderAction(
     notes: input.notes ? input.notes.trim() : null,
   };
 
-  // 8. Eksekusi Atomic RPC (H-1)
+  // 8. Eksekusi Atomic RPC (H-1 & F1.4 3-parameter)
   const { data: rpcData, error: rpcError } = await context.supabase.rpc(
     "create_pos_order_atomic",
     {
       p_order: orderPayload,
       p_items: itemsPayload,
+      p_discounts: discountsPayload,
     },
   );
 
@@ -666,6 +688,13 @@ export async function appendOrderItemsAction(
       ok: false,
       message:
         "Hanya pesanan yang belum dibayar (Menunggu Pembayaran) yang dapat ditambah item.",
+    };
+  }
+
+  if (existingOrder.is_finalized) {
+    return {
+      ok: false,
+      message: "Pesanan sudah difinalisasi dan tidak dapat ditambah item baru.",
     };
   }
 

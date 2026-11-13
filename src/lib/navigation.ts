@@ -3,6 +3,7 @@ import {
   LayoutDashboard,
   MapPin,
   MonitorPlay,
+  Percent,
   ShoppingCart,
   Users,
   UtensilsCrossed,
@@ -39,6 +40,13 @@ export const NAV_ITEMS: NavItem[] = [
     label: "Meja & Denah",
     description: "Zona, nomor meja, kapasitas, dan layout denah.",
     icon: MapPin,
+    roles: ["admin"],
+  },
+  {
+    href: "/admin/discounts",
+    label: "Diskon & Promo",
+    description: "Pengaturan promo produk, promo pesanan, dan diskon.",
+    icon: Percent,
     roles: ["admin"],
   },
   {

@@ -1,13 +1,18 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { CartPanel } from "@/components/pos/cart-panel";
+import {
+  DiscountModal,
+  type ManualDiscountState,
+} from "@/components/pos/discount-modal";
 import { ModifierModal } from "@/components/pos/modifier-modal";
 import { OrderCancelModal } from "@/components/pos/order-cancel-modal";
 import { OrderConfirmationModal } from "@/components/pos/order-confirmation-modal";
 import { ProductCatalog } from "@/components/pos/product-catalog";
 import { TableSelectModal } from "@/components/pos/table-select-modal";
+import { calculateCartTotalsWithDiscounts } from "@/lib/discounts/calculations";
 import {
   createPosOrderAction,
   getActiveOrderForTableAction,
@@ -17,7 +22,12 @@ import type {
   OrderWithDetails,
   ProductWithModifiers,
 } from "@/lib/orders/types";
-import type { DiningTable, MenuCategory, TableZone } from "@/types/database";
+import type {
+  DiningTable,
+  Discount,
+  MenuCategory,
+  TableZone,
+} from "@/types/database";
 
 export type PosContainerProps = {
   products: ProductWithModifiers[];
@@ -26,6 +36,8 @@ export type PosContainerProps = {
   zones: TableZone[];
   taxPercent: number;
   serviceChargePercent: number;
+  discounts?: Discount[];
+  userRole?: string;
 };
 
 export function PosContainer({
@@ -35,6 +47,8 @@ export function PosContainer({
   zones,
   taxPercent,
   serviceChargePercent,
+  discounts = [],
+  userRole = "kasir",
 }: PosContainerProps) {
   // Cart & Order State
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -48,6 +62,13 @@ export function PosContainer({
   const [customerName, setCustomerName] = useState("");
   const [orderNotes, setOrderNotes] = useState("");
 
+  // Discount States
+  const [selectedOrderPromo, setSelectedOrderPromo] =
+    useState<Discount | null>(null);
+  const [manualDiscount, setManualDiscount] =
+    useState<ManualDiscountState | null>(null);
+  const [isDiscountModalOpen, setIsDiscountModalOpen] = useState(false);
+
   // M-2: Idempotency key generated per submission attempt, preserved across retries
   const [idempotencyKey, setIdempotencyKey] = useState<string>(() =>
     crypto.randomUUID(),
@@ -55,6 +76,16 @@ export function PosContainer({
 
   const refreshIdempotencyKey = () => {
     setIdempotencyKey(crypto.randomUUID());
+  };
+
+  const handleCartModification = () => {
+    refreshIdempotencyKey();
+    if (manualDiscount) {
+      setManualDiscount(null);
+      toast.warning(
+        "Isi keranjang berubah. Diskon manual perlu otorisasi ulang dari Admin.",
+      );
+    }
   };
 
   // Modal States
@@ -68,6 +99,38 @@ export function PosContainer({
 
   const [isSubmitting, startSubmitting] = useTransition();
 
+  // Map category IDs for product discounts
+  const productCategoryMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of products) {
+      if (p.category_id) {
+        map.set(p.id, p.category_id);
+      }
+    }
+    return map;
+  }, [products]);
+
+  // Authoritative calculations with multi-tiered discounts
+  const totals = useMemo(() => {
+    return calculateCartTotalsWithDiscounts({
+      cart,
+      taxPercent,
+      serviceChargePercent,
+      availableDiscounts: discounts,
+      selectedOrderPromo,
+      manualDiscount,
+      productCategoryMap,
+    });
+  }, [
+    cart,
+    taxPercent,
+    serviceChargePercent,
+    discounts,
+    selectedOrderPromo,
+    manualDiscount,
+    productCategoryMap,
+  ]);
+
   // Handle selecting a product from catalog
   const handleSelectProduct = (product: ProductWithModifiers) => {
     const activeModifiers = product.modifierGroups.filter((g) => g.is_active);
@@ -76,15 +139,13 @@ export function PosContainer({
     if (activeModifiers.length > 0) {
       setModifierProduct(product);
     } else {
-      // Add directly to cart without modifiers
       handleAddDirectProduct(product);
     }
   };
 
   const handleAddDirectProduct = (product: ProductWithModifiers) => {
-    refreshIdempotencyKey();
+    handleCartModification();
     setCart((prev) => {
-      // Check if item without modifiers already exists
       const existingIndex = prev.findIndex(
         (item) => item.productId === product.id && item.modifiers.length === 0,
       );
@@ -117,13 +178,13 @@ export function PosContainer({
   };
 
   const handleAddToCart = (item: CartItem) => {
-    refreshIdempotencyKey();
+    handleCartModification();
     setCart((prev) => [...prev, item]);
     toast.success(`Ditambahkan: ${item.productName}`);
   };
 
   const handleUpdateQuantity = (cartItemId: string, delta: number) => {
-    refreshIdempotencyKey();
+    handleCartModification();
     setCart((prev) =>
       prev
         .map((item) => {
@@ -138,18 +199,20 @@ export function PosContainer({
   };
 
   const handleRemoveItem = (cartItemId: string) => {
-    refreshIdempotencyKey();
+    handleCartModification();
     setCart((prev) => prev.filter((item) => item.id !== cartItemId));
   };
 
   const handleClearCart = () => {
     setCart([]);
+    setSelectedOrderPromo(null);
+    setManualDiscount(null);
     setCustomerName("");
     setOrderNotes("");
     refreshIdempotencyKey();
   };
 
-  // H-2: Handle table selection with automatic detection of unpaid active orders
+  // Handle table selection with automatic detection of unpaid active orders
   const handleSelectTable = async (table: DiningTable) => {
     setSelectedTable(table);
 
@@ -186,6 +249,18 @@ export function PosContainer({
     }
 
     startSubmitting(async () => {
+      // Siapkan payload diskon
+      const discountsPayload = totals.appliedDiscounts.map((d) => ({
+        scope: d.scope,
+        clientItemId: d.clientItemId || null,
+        discountId: d.discountId || null,
+        name: d.name,
+        discountType: d.discountType,
+        discountRate: d.discountRate,
+        approvalNonce: d.approvalNonce || null,
+        reason: d.reason || null,
+      }));
+
       const payload = {
         orderType,
         tableId: orderType === "dine_in" ? selectedTable?.id : null,
@@ -194,11 +269,13 @@ export function PosContainer({
         idempotencyKey: !activeTableOrder ? idempotencyKey : undefined,
         existingOrderId: activeTableOrder?.id,
         items: cart.map((item) => ({
+          clientItemId: item.id,
           productId: item.productId,
           quantity: item.quantity,
           notes: item.notes || null,
           modifierOptionIds: item.modifiers.map((m) => m.optionId),
         })),
+        discounts: !activeTableOrder ? discountsPayload : [],
       };
 
       const result = await createPosOrderAction(payload);
@@ -238,9 +315,11 @@ export function PosContainer({
             activeOrderNumber={activeTableOrder?.order_number}
             customerName={customerName}
             orderNotes={orderNotes}
-            taxPercent={taxPercent}
-            serviceChargePercent={serviceChargePercent}
             isSubmitting={isSubmitting}
+            totals={totals}
+            selectedOrderPromoName={selectedOrderPromo?.name}
+            hasManualDiscount={manualDiscount !== null}
+            onOpenDiscountModal={() => setIsDiscountModalOpen(true)}
             onOrderTypeChange={handleOrderTypeChange}
             onOpenTableModal={() => setIsTableModalOpen(true)}
             onCustomerNameChange={setCustomerName}
@@ -254,6 +333,18 @@ export function PosContainer({
       </div>
 
       {/* Modals */}
+      <DiscountModal
+        isOpen={isDiscountModalOpen}
+        onClose={() => setIsDiscountModalOpen(false)}
+        cartSubtotal={totals.subtotal}
+        availableDiscounts={discounts}
+        selectedOrderPromo={selectedOrderPromo}
+        onSelectOrderPromo={setSelectedOrderPromo}
+        manualDiscount={manualDiscount}
+        onApplyManualDiscount={setManualDiscount}
+        idempotencyKey={idempotencyKey}
+      />
+
       <ModifierModal
         product={modifierProduct}
         isOpen={modifierProduct !== null}
@@ -274,6 +365,8 @@ export function PosContainer({
         order={confirmedOrder}
         isOpen={confirmedOrder !== null}
         onClose={() => setConfirmedOrder(null)}
+        userRole={userRole}
+        onOrderUpdated={(updated) => setConfirmedOrder(updated)}
         onOpenCancel={(order) => {
           setConfirmedOrder(null);
           setOrderToCancel(order);

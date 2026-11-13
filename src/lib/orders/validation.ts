@@ -14,6 +14,7 @@ export const tableIdSchema = z
   .regex(uuidRegex, "ID meja tidak valid.");
 
 export const createOrderItemSchema = z.object({
+  clientItemId: z.string().trim().optional().nullable(),
   productId: z.string().trim().regex(uuidRegex, "ID produk tidak valid."),
   quantity: z.coerce
     .number()
@@ -29,6 +30,39 @@ export const createOrderItemSchema = z.object({
   modifierOptionIds: z
     .array(z.string().trim().regex(uuidRegex, "ID opsi modifier tidak valid."))
     .default([]),
+});
+
+export const createOrderDiscountSchema = z.object({
+  scope: z.enum(["product", "order", "manual"], {
+    message: "Scope diskon harus 'product', 'order', atau 'manual'.",
+  }),
+  clientItemId: z.string().trim().optional().nullable(),
+  orderItemId: z
+    .string()
+    .trim()
+    .regex(uuidRegex, "ID item tidak valid.")
+    .optional()
+    .nullable(),
+  discountId: z
+    .string()
+    .trim()
+    .regex(uuidRegex, "ID diskon tidak valid.")
+    .optional()
+    .nullable(),
+  name: z.string().trim().optional().nullable(),
+  discountType: z.enum(["percentage", "fixed"], {
+    message: "Tipe diskon harus 'percentage' atau 'fixed'.",
+  }),
+  discountRate: z.coerce
+    .number({ message: "Nilai diskon harus berupa angka." })
+    .positive("Nilai diskon harus lebih dari 0."),
+  approvalNonce: z.string().trim().optional().nullable(),
+  reason: z
+    .string()
+    .trim()
+    .max(300, "Alasan maksimal 300 karakter.")
+    .optional()
+    .nullable(),
 });
 
 export const createOrderSchema = z
@@ -71,6 +105,7 @@ export const createOrderSchema = z
       .array(createOrderItemSchema)
       .min(1, "Keranjang pesanan tidak boleh kosong.")
       .max(100, "Maksimal 100 jenis item per pesanan."),
+    discounts: z.array(createOrderDiscountSchema).default([]),
   })
   .superRefine((data, ctx) => {
     if (data.orderType === "dine_in" && !data.tableId) {

@@ -14,6 +14,7 @@ import type {
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import type {
   DiningTable,
+  Discount,
   MenuCategory,
   ModifierGroup,
   ModifierOption,
@@ -30,6 +31,7 @@ export default async function PosPage() {
   let productsWithModifiers: ProductWithModifiers[] = [];
   let tables: DiningTable[] = [];
   let zones: TableZone[] = [];
+  let discounts: Discount[] = [];
   let taxPercent = 10;
   let serviceChargePercent = 5;
   let loadError: string | null = null;
@@ -47,6 +49,7 @@ export default async function PosPage() {
         tablesRes,
         zonesRes,
         settingsRes,
+        discountsRes,
       ] = await Promise.all([
         supabase
           .from("menu_categories")
@@ -92,6 +95,11 @@ export default async function PosPage() {
             tax_percent: number;
             service_charge_percent: number;
           }>(),
+        supabase
+          .from("discounts")
+          .select("*")
+          .eq("is_active", true)
+          .order("name", { ascending: true }),
       ]);
 
       if (categoriesRes.error || productsRes.error) {
@@ -105,6 +113,7 @@ export default async function PosPage() {
         const optionsList = (optionsRes.data ?? []) as ModifierOption[];
         tables = (tablesRes.data ?? []) as DiningTable[];
         zones = (zonesRes.data ?? []) as TableZone[];
+        discounts = (discountsRes.data ?? []) as Discount[];
 
         if (settingsRes.data) {
           taxPercent = Number(settingsRes.data.tax_percent) || 0;
@@ -219,6 +228,8 @@ export default async function PosPage() {
           zones={zones}
           taxPercent={taxPercent}
           serviceChargePercent={serviceChargePercent}
+          discounts={discounts}
+          userRole={session.profile.role}
         />
       )}
     </div>

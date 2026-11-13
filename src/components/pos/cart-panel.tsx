@@ -6,8 +6,10 @@ import {
   LoaderCircle,
   MapPin,
   Minus,
+  Percent,
   Plus,
   ShoppingBag,
+  Tag,
   Trash2,
   User,
   UtensilsCrossed,
@@ -17,8 +19,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
+import type { CartCalculationWithDiscounts } from "@/lib/discounts/types";
 import { formatRupiah } from "@/lib/menu/format";
-import { calculateCartTotals, calculateItemSubtotal } from "@/lib/orders/calculations";
+import { calculateItemSubtotal } from "@/lib/orders/calculations";
 import type { CartItem } from "@/lib/orders/types";
 import type { DiningTable, OrderType } from "@/types/database";
 
@@ -29,9 +32,11 @@ export type CartPanelProps = {
   activeOrderNumber?: string | null;
   customerName: string;
   orderNotes: string;
-  taxPercent: number;
-  serviceChargePercent: number;
   isSubmitting: boolean;
+  totals: CartCalculationWithDiscounts;
+  selectedOrderPromoName?: string | null;
+  hasManualDiscount?: boolean;
+  onOpenDiscountModal: () => void;
   onOrderTypeChange: (type: OrderType) => void;
   onOpenTableModal: () => void;
   onCustomerNameChange: (name: string) => void;
@@ -49,9 +54,11 @@ export function CartPanel({
   activeOrderNumber,
   customerName,
   orderNotes,
-  taxPercent,
-  serviceChargePercent,
   isSubmitting,
+  totals,
+  selectedOrderPromoName,
+  hasManualDiscount,
+  onOpenDiscountModal,
   onOrderTypeChange,
   onOpenTableModal,
   onCustomerNameChange,
@@ -61,7 +68,6 @@ export function CartPanel({
   onClearCart,
   onSubmitOrder,
 }: CartPanelProps) {
-  const totals = calculateCartTotals(cart, taxPercent, serviceChargePercent);
   const isDineIn = orderType === "dine_in";
   const canSubmit =
     cart.length > 0 && (!isDineIn || selectedTable !== null) && !isSubmitting;
@@ -151,6 +157,7 @@ export function CartPanel({
             </div>
           </div>
         )}
+
         {/* Optional Order Notes */}
         <div className="relative">
           <FileText className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
@@ -164,7 +171,7 @@ export function CartPanel({
           />
         </div>
 
-        {/* H-2: Active Order Banner if Appending Items */}
+        {/* Active Order Banner if Appending Items */}
         {isDineIn && activeOrderNumber && (
           <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-2 text-xs flex items-center justify-between text-amber-800 dark:text-amber-300">
             <span className="font-medium truncate mr-1">
@@ -193,6 +200,9 @@ export function CartPanel({
           <div className="space-y-2.5">
             {cart.map((item) => {
               const itemSubtotal = calculateItemSubtotal(item);
+              const appliedItemDiscount = totals.appliedDiscounts.find(
+                (d) => d.scope === "product" && d.clientItemId === item.id,
+              );
 
               return (
                 <div
@@ -209,8 +219,21 @@ export function CartPanel({
                       </div>
                     </div>
 
-                    <div className="text-right shrink-0 font-bold text-sm text-primary">
-                      {formatRupiah(itemSubtotal)}
+                    <div className="text-right shrink-0">
+                      {appliedItemDiscount ? (
+                        <div>
+                          <div className="line-through text-muted-foreground text-[11px]">
+                            {formatRupiah(itemSubtotal)}
+                          </div>
+                          <div className="font-bold text-sm text-primary font-mono">
+                            {formatRupiah(itemSubtotal - appliedItemDiscount.discountAmount)}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="font-bold text-sm text-primary font-mono">
+                          {formatRupiah(itemSubtotal)}
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -226,6 +249,16 @@ export function CartPanel({
                           {mod.priceDelta > 0 && ` (+${formatRupiah(mod.priceDelta)})`}
                         </span>
                       ))}
+                    </div>
+                  )}
+
+                  {/* Product Promo Badge */}
+                  {appliedItemDiscount && (
+                    <div className="flex items-center gap-1 text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold">
+                      <Percent className="size-3" />
+                      <span>
+                        Diskon: {appliedItemDiscount.name} (-{formatRupiah(appliedItemDiscount.discountAmount)})
+                      </span>
                     </div>
                   )}
 
@@ -257,7 +290,7 @@ export function CartPanel({
                       >
                         <Minus className="size-3" />
                       </Button>
-                      <span className="w-7 text-center font-bold text-xs">
+                      <span className="w-7 text-center font-bold text-xs font-mono">
                         {item.quantity}
                       </span>
                       <Button
@@ -280,6 +313,36 @@ export function CartPanel({
 
       {/* Footer: Order Calculation & Submit Action */}
       <CardFooter className="flex-col p-4 border-t bg-muted/20 space-y-3 shrink-0">
+        {/* Diskon & Promo Quick Button */}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={onOpenDiscountModal}
+          className={`w-full justify-between h-8 text-xs font-medium border ${
+            totals.discountTotal > 0
+              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+              : "border-border/80 text-foreground"
+          }`}
+        >
+          <div className="flex items-center gap-1.5 truncate">
+            <Tag className="size-3.5 text-primary shrink-0" />
+            <span className="truncate">
+              {totals.discountTotal > 0 ? (
+                <>
+                  Diskon Aktif:{" "}
+                  <strong>-{formatRupiah(totals.discountTotal)}</strong>
+                  {selectedOrderPromoName && ` (${selectedOrderPromoName})`}
+                  {hasManualDiscount && " [Manual]"}
+                </>
+              ) : (
+                "Pilih Promo & Diskon Manual"
+              )}
+            </span>
+          </div>
+          <ChevronRight className="size-3.5 text-muted-foreground shrink-0" />
+        </Button>
+
         <div className="w-full space-y-1.5 text-xs">
           <div className="flex items-center justify-between text-muted-foreground">
             <span>Subtotal</span>
@@ -287,6 +350,54 @@ export function CartPanel({
               {formatRupiah(totals.subtotal)}
             </span>
           </div>
+
+          {/* Rincian Diskon Produk */}
+          {totals.discountProductTotal > 0 && (
+            <div className="flex items-center justify-between text-emerald-600 dark:text-emerald-400">
+              <span>Diskon Menu</span>
+              <span className="font-mono font-medium">
+                -{formatRupiah(totals.discountProductTotal)}
+              </span>
+            </div>
+          )}
+
+          {/* Rincian Diskon Promo Pesanan */}
+          {totals.discountOrderTotal > 0 && (
+            <div className="flex items-center justify-between text-emerald-600 dark:text-emerald-400">
+              <span>Promo Pesanan {selectedOrderPromoName && `(${selectedOrderPromoName})`}</span>
+              <span className="font-mono font-medium">
+                -{formatRupiah(totals.discountOrderTotal)}
+              </span>
+            </div>
+          )}
+
+          {/* Rincian Diskon Manual */}
+          {totals.discountManualTotal > 0 && (
+            <div className="flex items-center justify-between text-emerald-600 dark:text-emerald-400">
+              <span>Diskon Manual [Admin]</span>
+              <span className="font-mono font-medium">
+                -{formatRupiah(totals.discountManualTotal)}
+              </span>
+            </div>
+          )}
+
+          {/* Total Diskon & Dasar Kena Pajak jika diskon > 0 */}
+          {totals.discountTotal > 0 && (
+            <>
+              <div className="flex items-center justify-between text-xs font-semibold text-emerald-700 dark:text-emerald-300">
+                <span>Total Diskon</span>
+                <span className="font-mono">
+                  -{formatRupiah(totals.discountTotal)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-[11px] text-muted-foreground pt-0.5">
+                <span>Dasar Kena Pajak (Taxable Base)</span>
+                <span className="font-mono">
+                  {formatRupiah(totals.taxableBase)}
+                </span>
+              </div>
+            </>
+          )}
 
           <div className="flex items-center justify-between text-muted-foreground">
             <span>Pajak ({totals.taxPercent}%)</span>

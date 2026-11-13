@@ -7,6 +7,7 @@ import {
   Database,
   MapPin,
   MonitorPlay,
+  Percent,
   ReceiptText,
   Settings2,
   ShieldCheck,
@@ -187,6 +188,12 @@ export default async function AdminDashboardPage() {
               <Link href="/admin/tables">
                 <MapPin />
                 Kelola meja & denah
+              </Link>
+            </Button>
+            <Button asChild variant="secondary" size="sm">
+              <Link href="/admin/discounts">
+                <Percent />
+                Kelola diskon
               </Link>
             </Button>
             <Button asChild variant="secondary" size="sm">

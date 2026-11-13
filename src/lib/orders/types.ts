@@ -2,6 +2,7 @@ import type {
   ModifierGroup,
   ModifierOption,
   Order,
+  OrderDiscount,
   OrderItem,
   OrderItemModifier,
   Product,
@@ -57,6 +58,7 @@ export type OrderItemWithModifiers = OrderItem & {
 
 export type OrderWithDetails = Order & {
   items: OrderItemWithModifiers[];
+  discounts?: OrderDiscount[];
   tableName?: string | null;
   zoneName?: string | null;
 };
