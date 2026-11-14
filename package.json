@@ -14,7 +14,8 @@
     "verify:f1-2": "node scripts/verify-f1-2.mjs",
     "verify:f1-3": "node scripts/verify-f1-3.mjs",
     "verify:f1-4": "node scripts/verify-f1-4.mjs",
-    "verify:f1-4-stage2": "node scripts/verify-f1-4-stage2.mjs"
+    "verify:f1-4-stage2": "node scripts/verify-f1-4-stage2.mjs",
+    "verify:f2-1": "node scripts/verify-f2-1.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

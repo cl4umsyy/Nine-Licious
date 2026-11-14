@@ -973,7 +973,7 @@ export async function cancelPosOrderAction(
     };
   }
 
-  // Panggil fungsi tersimpan cancel_pos_order jika tersedia
+  // Panggil fungsi tersimpan cancel_pos_order resmi (p_order_id, p_cancel_reason)
   const { data: rpcData, error: rpcError } = await context.supabase.rpc(
     "cancel_pos_order",
     {
@@ -983,100 +983,6 @@ export async function cancelPosOrderAction(
   );
 
   if (rpcError) {
-    // Jika function belum ada di remote DB (PGRST202), gunakan query update langsung
-    if (
-      rpcError.code === "PGRST202" ||
-      rpcError.message.includes("cancel_pos_order")
-    ) {
-      const { data: existingOrder } = await context.supabase
-        .from("orders")
-        .select("*")
-        .eq("id", parsed.data.orderId)
-        .maybeSingle<Order>();
-
-      if (!existingOrder) {
-        return { ok: false, message: "Pesanan tidak ditemukan." };
-      }
-
-      if (
-        existingOrder.status !== "awaiting_payment" ||
-        existingOrder.payment_status !== "unpaid"
-      ) {
-        return {
-          ok: false,
-          message:
-            "Hanya pesanan yang belum dibayar (Menunggu Pembayaran) yang dapat dibatalkan.",
-        };
-      }
-
-      const { data: updatedOrder, error: updateError } = await context.supabase
-        .from("orders")
-        .update({
-          status: "cancelled",
-          cancelled_by: context.actor.user.id,
-          cancelled_at: new Date().toISOString(),
-          cancel_reason: parsed.data.reason,
-        })
-        .eq("id", parsed.data.orderId)
-        .select("*")
-        .single<Order>();
-
-      if (updateError || !updatedOrder) {
-        return { ok: false, message: "Gagal membatalkan pesanan." };
-      }
-
-      // Evaluasi meja jika dine-in
-      if (
-        existingOrder.order_type === "dine_in" &&
-        existingOrder.dining_session_id
-      ) {
-        const { count } = await context.supabase
-          .from("orders")
-          .select("id", { count: "exact", head: true })
-          .eq("dining_session_id", existingOrder.dining_session_id)
-          .in("status", ["awaiting_payment", "partially_paid", "paid"])
-          .neq("id", existingOrder.id);
-
-        if ((count ?? 0) === 0) {
-          await context.supabase
-            .from("dining_sessions")
-            .update({
-              status: "cancelled",
-              closed_at: new Date().toISOString(),
-              closed_by: context.actor.user.id,
-            })
-            .eq("id", existingOrder.dining_session_id);
-
-          if (existingOrder.table_id) {
-            await context.supabase
-              .from("dining_tables")
-              .update({ status: "empty" })
-              .eq("id", existingOrder.table_id);
-          }
-        }
-      }
-
-      await logAudit({
-        action: "order.cancel",
-        userId: context.actor.user.id,
-        username: context.actor.profile.username,
-        entity: "order",
-        entityId: updatedOrder.id,
-        details: {
-          order_number: updatedOrder.order_number,
-          reason: parsed.data.reason,
-          order_type: updatedOrder.order_type,
-          table_id: updatedOrder.table_id,
-        },
-      });
-
-      revalidatePosPaths();
-      return {
-        ok: true,
-        message: `Pesanan ${updatedOrder.order_number} berhasil dibatalkan.`,
-      };
-    }
-
     return {
       ok: false,
       message: rpcError.message || "Gagal membatalkan pesanan.",

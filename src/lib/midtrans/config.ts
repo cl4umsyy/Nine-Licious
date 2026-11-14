@@ -1,33 +1,34 @@
 import "server-only";
 
-import { z } from "zod";
-
-const midtransEnvironmentSchema = z.enum(["sandbox", "production"]);
+export type MidtransEnvironment = "sandbox" | "production";
 
 function blankToUndefined(value: unknown): unknown {
   return typeof value === "string" && value.trim() === "" ? undefined : value;
 }
 
-const midtransEnvSchema = z.object({
-  MIDTRANS_ENABLED: z.preprocess(
-    blankToUndefined,
-    z.enum(["true", "false"]).default("false"),
-  ),
-  MIDTRANS_ENV: z.preprocess(
-    blankToUndefined,
-    midtransEnvironmentSchema.optional(),
-  ),
-  MIDTRANS_SERVER_KEY: z.preprocess(
-    blankToUndefined,
-    z.string().trim().optional(),
-  ),
-  NEXT_PUBLIC_MIDTRANS_CLIENT_KEY: z.preprocess(
-    blankToUndefined,
-    z.string().trim().optional(),
-  ),
-});
+function resolveEnvironment(
+  envVal: unknown,
+  isProdVal: unknown,
+): MidtransEnvironment | undefined {
+  if (typeof envVal === "string") {
+    const trimmed = envVal.trim().toLowerCase();
+    if (trimmed === "sandbox" || trimmed === "production") {
+      return trimmed;
+    }
+  }
 
-export type MidtransEnvironment = z.infer<typeof midtransEnvironmentSchema>;
+  if (typeof isProdVal === "boolean") {
+    return isProdVal ? "production" : "sandbox";
+  }
+
+  if (typeof isProdVal === "string") {
+    const trimmed = isProdVal.trim().toLowerCase();
+    if (trimmed === "true" || trimmed === "1") return "production";
+    if (trimmed === "false" || trimmed === "0") return "sandbox";
+  }
+
+  return undefined;
+}
 
 export type MidtransConfig = {
   environment: MidtransEnvironment;
@@ -65,32 +66,31 @@ const SNAP_SCRIPT_URL: Record<MidtransEnvironment, string> = {
  * marking an order as paid.
  */
 export function getMidtransConfigState(): MidtransConfigState {
-  const parsed = midtransEnvSchema.safeParse({
-    MIDTRANS_ENABLED: process.env.MIDTRANS_ENABLED,
-    MIDTRANS_ENV: process.env.MIDTRANS_ENV,
-    MIDTRANS_SERVER_KEY: process.env.MIDTRANS_SERVER_KEY,
-    NEXT_PUBLIC_MIDTRANS_CLIENT_KEY: process.env.NEXT_PUBLIC_MIDTRANS_CLIENT_KEY,
-  });
+  const rawEnabled = blankToUndefined(process.env.MIDTRANS_ENABLED);
+  const rawEnv = blankToUndefined(process.env.MIDTRANS_ENV);
+  const rawIsProduction = blankToUndefined(process.env.MIDTRANS_IS_PRODUCTION);
+  const rawServerKey = blankToUndefined(process.env.MIDTRANS_SERVER_KEY);
+  const rawClientKey = blankToUndefined(
+    process.env.NEXT_PUBLIC_MIDTRANS_CLIENT_KEY || process.env.MIDTRANS_CLIENT_KEY,
+  );
 
-  if (!parsed.success) {
-    return {
-      enabled: true,
-      ok: false,
-      error: "Konfigurasi Midtrans tidak valid. Periksa variabel environment.",
-    };
-  }
+  // Jika MIDTRANS_ENABLED tidak didefinisikan secara eksplisit, aktifkan jika MIDTRANS_SERVER_KEY ada
+  const isExplicitlyDisabled = rawEnabled === "false";
+  const isExplicitlyEnabled = rawEnabled === "true";
+  const isAutoEnabled = rawEnabled === undefined && Boolean(rawServerKey);
 
-  if (parsed.data.MIDTRANS_ENABLED !== "true") {
+  if (isExplicitlyDisabled || (!isExplicitlyEnabled && !isAutoEnabled)) {
     return { enabled: false };
   }
 
-  const environment = parsed.data.MIDTRANS_ENV;
+  const environment = resolveEnvironment(rawEnv, rawIsProduction);
 
   if (!environment) {
     return {
       enabled: true,
       ok: false,
-      error: "MIDTRANS_ENV wajib diisi dengan sandbox atau production.",
+      error:
+        "MIDTRANS_ENV (sandbox/production) atau MIDTRANS_IS_PRODUCTION (false/true) wajib dikonfigurasi.",
     };
   }
 
@@ -101,7 +101,7 @@ export function getMidtransConfigState(): MidtransConfigState {
       enabled: true,
       ok: false,
       error:
-        "Production hanya boleh memakai MIDTRANS_ENV=production. Sandbox tidak diizinkan di production.",
+        "Production hanya boleh memakai MIDTRANS_ENV=production atau MIDTRANS_IS_PRODUCTION=true. Sandbox tidak diizinkan di production.",
     };
   }
 
@@ -110,19 +110,19 @@ export function getMidtransConfigState(): MidtransConfigState {
       enabled: true,
       ok: false,
       error:
-        "Development hanya boleh memakai MIDTRANS_ENV=sandbox. Jangan memakai kredensial production di development.",
+        "Development hanya boleh memakai MIDTRANS_ENV=sandbox atau MIDTRANS_IS_PRODUCTION=false. Jangan memakai kredensial production di development.",
     };
   }
 
-  const serverKey = parsed.data.MIDTRANS_SERVER_KEY;
-  const clientKey = parsed.data.NEXT_PUBLIC_MIDTRANS_CLIENT_KEY;
+  const serverKey = typeof rawServerKey === "string" ? rawServerKey.trim() : "";
+  const clientKey = typeof rawClientKey === "string" ? rawClientKey.trim() : "";
 
   if (!serverKey || !clientKey) {
     return {
       enabled: true,
       ok: false,
       error:
-        "MIDTRANS_SERVER_KEY dan NEXT_PUBLIC_MIDTRANS_CLIENT_KEY wajib diisi saat Midtrans aktif.",
+        "MIDTRANS_SERVER_KEY dan MIDTRANS_CLIENT_KEY (atau NEXT_PUBLIC_MIDTRANS_CLIENT_KEY) wajib diisi saat Midtrans aktif.",
     };
   }
 

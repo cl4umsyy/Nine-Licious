@@ -202,6 +202,8 @@ export type Order = {
   paid_total: number;
   idempotency_key: string | null;
   business_date: string;
+  queue_number?: string | null;
+  queue_date?: string | null;
   is_finalized: boolean;
   finalized_at: string | null;
   finalized_by: string | null;
@@ -293,5 +295,137 @@ export type OrderDiscount = {
   approved_at: string | null;
   created_at: string;
 };
+
+export type PaymentMethod = "cash" | "qris" | "bank_transfer" | "midtrans";
+
+export type PaymentSource =
+  | "cash"
+  | "qris_manual"
+  | "qris_midtrans"
+  | "bank_transfer"
+  | "midtrans_snap";
+
+export type PaymentRecordStatus = "pending" | "success" | "failed" | "refunded";
+
+export type Payment = {
+  id: string;
+  order_id: string;
+  payment_method: PaymentMethod;
+  payment_source: PaymentSource;
+  amount: number;
+  cash_received: number | null;
+  change_amount: number;
+  reference_number: string | null;
+  payment_status: PaymentRecordStatus;
+  idempotency_key: string | null;
+  notes: string | null;
+  paid_total_after?: number | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MidtransLifecycleStatus =
+  | "initiated"
+  | "pre_request_aborted"
+  | "token_created"
+  | "pending"
+  | "capture_challenge"
+  | "settled"
+  | "reconciliation_required"
+  | "expired"
+  | "cancelled"
+  | "denied";
+
+export type MidtransSplitBillType = "custom_amount" | "by_item";
+
+export type MidtransTransaction = {
+  id: string;
+  order_id: string;
+  midtrans_order_id: string;
+  gross_amount: number;
+  payment_type: string;
+  snap_token: string | null;
+  snap_redirect_url: string | null;
+  lifecycle_status: MidtransLifecycleStatus;
+  midtrans_transaction_status: string | null;
+  idempotency_key: string;
+  payload_fingerprint: string;
+  attempt_number: number;
+  is_split_bill: boolean;
+  split_bill_type: MidtransSplitBillType | null;
+  snap_page_expires_at: string;
+  payment_expires_at: string;
+  settled_at: string | null;
+  sanitized_response: Record<string, unknown> | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AllocationType = "full" | "custom_amount" | "by_item";
+
+export type AllocationStatus = "reserved" | "settled" | "released";
+
+export type OrderAllocation = {
+  id: string;
+  order_id: string;
+  allocation_type: AllocationType;
+  order_item_id: string | null;
+  allocated_quantity: number | null;
+  allocated_line_subtotal: number;
+  allocated_discount_share: number;
+  allocated_service_share: number;
+  allocated_tax_share: number;
+  allocated_rounding_adjustment: number;
+  allocated_final_amount: number;
+  midtrans_transaction_id: string | null;
+  payment_id: string | null;
+  allocation_status: AllocationStatus;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OrderAllocationEvent = {
+  id: number;
+  allocation_id: string;
+  order_id: string;
+  from_status: AllocationStatus | null;
+  to_status: AllocationStatus;
+  transition_reason: string;
+  payment_id: string | null;
+  midtrans_transaction_id: string | null;
+  event_metadata: Record<string, unknown>;
+  actor_id: string | null;
+  created_at: string;
+};
+
+export type WebhookProcessingResult =
+  | "received"
+  | "processing"
+  | "settled"
+  | "ignored_duplicate"
+  | "ignored_out_of_order"
+  | "reconciliation_flagged"
+  | "terminal_released"
+  | "failed";
+
+export type MidtransWebhookEvent = {
+  id: number;
+  event_fingerprint: string;
+  midtrans_order_id: string;
+  transaction_id: string | null;
+  raw_status: string;
+  received_at: string;
+  processed_at: string | null;
+  processing_result: WebhookProcessingResult;
+  is_signature_verified: boolean;
+  is_duplicate: boolean;
+  delivery_attempts: number;
+  last_delivery_at: string;
+  error_message: string | null;
+  sanitized_payload: Record<string, unknown>;
+};
+
 
 
