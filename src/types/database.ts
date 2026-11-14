@@ -200,6 +200,7 @@ export type Order = {
   service_total: number;
   grand_total: number;
   paid_total: number;
+  refunded_total?: number;
   idempotency_key: string | null;
   business_date: string;
   queue_number?: string | null;
@@ -425,6 +426,33 @@ export type MidtransWebhookEvent = {
   last_delivery_at: string;
   error_message: string | null;
   sanitized_payload: Record<string, unknown>;
+};
+
+export type RefundType = "full" | "partial";
+
+export type RefundMethod = "cash" | "transfer" | "midtrans" | "manual";
+
+export type RefundRecordStatus = "pending" | "approved" | "rejected" | "completed";
+
+export type Refund = {
+  id: string;
+  order_id: string;
+  payment_id: string | null;
+  refund_number: string;
+  gateway_refund_id?: string | null;
+  refund_type: RefundType;
+  refund_method: RefundMethod;
+  amount: number;
+  reason: string;
+  status: RefundRecordStatus;
+  requested_by: string;
+  approved_by: string | null;
+  approved_at: string | null;
+  kitchen_notified_at: string | null;
+  idempotency_key: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
 };
 
 

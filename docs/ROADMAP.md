@@ -489,11 +489,16 @@ mendapat nomor antrean baru tanpa menggandakan transaksi.
 - Audit pembayaran, split bill, transaksi gateway Midtrans, diskon, refund,
   approval, dan notifikasi dapur.
 
-### 5.3 Migration
+### 5.3 Milestone & Migration F2
 
-| File usulan | Isi |
-| --- | --- |
-| `supabase/migrations/20261112000100_payments_queue.sql` | Pembayaran, sumber/channel, transaksi gateway per pembayaran online, `midtrans_order_id` unik, `gateway_transaction_id`, refund approval + waktu notifikasi, kolom antrean/status, idempotency, index, RLS |
+Fase 2 dibagi menjadi 4 sub-milestone terstruktur:
+
+| Milestone | Migration | Isi |
+| --- | --- | --- |
+| **F2.1** | `supabase/migrations/20261112000100_payments_queue.sql` | Fondasi `payments`, nomor antrean harian atomik (`A001`), cash with change, QRIS Manual, Transfer Manual, state transition orders ke `paid`, transisi meja ke `occupied`. |
+| **F2.2** | `supabase/migrations/20261113000100_midtrans_split_bill.sql` | Integrasi Midtrans Snap & Webhook signature verification, split bill multi-payment/multi-method, idempotensi callback gateway, alokasi split bill. |
+| **F2.3** | `supabase/migrations/20261114000100_additional_orders_table_status.sql` & `supabase/migrations/20261114000200_fix_f2_3_runtime.sql` | Pesanan tambahan pada sesi dine-in yang sama, pencegahan deadlock via kanonikal row locking hierarchy, penutupan sesi atomik (`close_dining_session_atomic`), ringkasan sesi (`get_dining_session_summary`). |
+| **F2.4** | `supabase/migrations/20261115000100_refunds_receipts.sql` | Tabel `refunds`, tracking `orders.refunded_total`, RPC `process_order_refund_atomic`, RPC `confirm_midtrans_refund_atomic` (service-role only), RPC `get_order_receipt_data`, proteksi over-refund/anti-overlap pending, penghentian tiket KDS aktif, format struk browser print 58/80 mm. |
 
 ### 5.4 Dependency
 

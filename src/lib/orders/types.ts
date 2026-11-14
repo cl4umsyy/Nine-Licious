@@ -63,3 +63,46 @@ export type OrderWithDetails = Order & {
   zoneName?: string | null;
 };
 
+export type DiningSessionOrderSummary = {
+  id: string;
+  order_number: string;
+  status: string;
+  payment_status: string;
+  kds_status?: string | null;
+  subtotal: number;
+  discount_total: number;
+  tax_total: number;
+  service_total: number;
+  grand_total: number;
+  paid_total: number;
+  remaining_balance: number;
+  created_at: string;
+};
+
+export type DiningSessionSummary = {
+  table_id: string;
+  table_name: string;
+  table_status: string;
+  has_active_session: boolean;
+  session_id?: string;
+  opened_at?: string;
+  total_orders: number;
+  unpaid_orders_count: number;
+  uncompleted_orders_count: number;
+  completed_orders_count: number;
+  reserved_allocations_count?: number;
+  pending_midtrans_transactions_count?: number;
+  processing_webhooks_count?: number;
+  session_subtotal: number;
+  session_discount_total: number;
+  session_tax_total: number;
+  session_service_total: number;
+  session_grand_total: number;
+  session_paid_total: number;
+  session_remaining_balance: number;
+  can_close_session: boolean;
+  blocking_reason?: string | null;
+  orders: DiningSessionOrderSummary[];
+};
+
+

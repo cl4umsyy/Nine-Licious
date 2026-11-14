@@ -965,53 +965,60 @@ flowchart TD
    pembayaran tertunda.
 5. Seluruh aksi refund, approval, pembatalan, dan dampak meja dicatat di audit.
 
-### 9.3 Refund setelah pembayaran
+### 9.3 Refund setelah pembayaran (F2.4 Contract)
 
-1. Refund hanya dapat dibuat dan disetujui **admin**. Kasir hanya melihat status.
-2. Admin membuat permintaan refund dengan alasan.
-3. Admin melakukan approval eksplisit.
-4. **Refund sebagian:** pesanan tetap **Lunas** atau **Selesai**; refund dicatat
-   pada riwayat pembayaran; tiket KDS tidak berubah.
-5. **Refund penuh sebelum pesanan lunas:** bila belum ada pembayaran atau baru
-   **Sebagian Dibayar**, pesanan menjadi **Dibatalkan** pada F2 setelah refund
-   bagian (bila ada) disetujui dan dicatat admin. Tidak ada antrean atau tiket
-   KDS yang perlu dihentikan.
-6. **Refund penuh setelah pesanan lunas dan tiket KDS masih aktif:**
-   - admin membuat permintaan dan menyetujui;
-   - tiket KDS dihentikan dan dihapus dari papan aktif;
-   - kitchen menerima notifikasi penghentian tiket;
-   - pesanan menjadi **Refund** dan antrean dihentikan;
-   - permintaan, approval/penolakan, penghentian tiket, dan notifikasi dicatat
-     di audit.
-7. **Refund penuh setelah pesanan Selesai:** pesanan menjadi **Refund** dan tetap
-   wajib approval admin. Tiket KDS sudah tidak aktif, sehingga tidak ada
-   notifikasi penghentian tiket; refund dan approval tetap dicatat di audit.
-8. Refund tunai memengaruhi shift aktif. Bila tidak ada shift aktif, admin dapat
-   mencatat pengeluaran tunai di luar shift.
-9. Refund tidak boleh diproses oleh non-admin.
+1. Refund hanya dapat diproses oleh pengguna dengan role **admin**. Kasir hanya dapat melihat status riwayat.
+2. Admin membuka modal refund dari detail pesanan di POS (`RefundModal`), memilih:
+   - Tipe refund: **Penuh (Full)** atau **Sebagian (Partial)**.
+   - Metode refund: **Tunai**, **QRIS Manual**, **Transfer**, atau **Midtrans**.
+   - Pada pesanan split bill: admin dapat memilih spesifik baris pembayaran (`payment_id`) yang direfund.
+   - Nominal refund (wajib positif dan tidak melebihi sisa dana yang tersedia).
+   - Alasan refund (wajib diisi minimal 3 karakter).
+3. **Pencegahan Over-Refund & Pending Overlap**:
+   - Sistem memvalidasi saldo yang dapat direfund secara atomik: $\text{paid\_total} - (\text{refunded\_total} + \sum \text{pending\_refunds})$.
+   - Jika ada refund Midtrans yang masih berstatus `pending`, nominalnya otomatis memotong batas dana yang tersedia agar tidak terjadi tumpang tindih permintaan paralel.
+4. **Alur Metode Non-Midtrans (Tunai, QRIS Manual, Transfer)**:
+   - Refund langsung dieksekusi dengan status `completed`.
+   - `approved_by` diisi ID admin dan `approved_at` diisi timestamp saat ini.
+   - Nominal refund langsung ditambahkan ke `orders.refunded_total`.
+5. **Alur Metode Midtrans Gateway**:
+   - Refund pertama kali dicatat dengan status `pending`.
+   - `approved_by` dan `approved_at` tetap `NULL` untuk mencegah klaim persetujuan sebelum gateway berhasil.
+   - Konfirmasi refund dilakukan melalui RPC `confirm_midtrans_refund_atomic` (`service_role` only) setelah API Midtrans atau webhook memberikan konfirmasi resmi dengan `gateway_refund_id`.
+   - Setelah dikonfirmasi, status menjadi `completed`, approver dan approved_at diisi, serta saldo refund ditambahkan ke `orders.refunded_total`.
+6. **Refund Sebagian (Partial)**:
+   - Pesanan tetap berstatus `paid` atau `completed`.
+   - Tiket KDS tidak berubah.
+   - Jika menargetkan pembayaran tertentu pada split bill, status pembayaran berubah menjadi `refunded` jika dan hanya jika total akumulasi refund pada pembayaran tersebut telah mencapai nilai pembayaran.
+7. **Refund Penuh (Full)**:
+   - Status pesanan berubah menjadi `refunded`.
+   - Jika tiket KDS masih aktif, tiket dihentikan (`orders.kds_status = NULL`), `cancelled_at` dan `cancelled_by` diisi, serta `refunds.kitchen_notified_at` diisi timestamp saat ini.
+   - Antrean dihentikan.
+8. Seluruh tindakan refund, penolakan, idempotensi, dan konfirmasi gateway dicatat secara lengkap pada `audit_logs`.
 
 ### 9.4 Diagram
 
 ```mermaid
 flowchart TD
-    A["Pesanan"] --> B{"Sudah lunas?"}
-    B -->|"Belum"| C["Batalkan (F1.3 tanpa pembayaran; F2 setelah refund bagian)"]
-    C --> D["F2: catat refund bagian bila ada"]
-    D --> E["Pesanan Dibatalkan"]
-    E --> F["Tidak ada antrean/KDS"]
-    B -->|"Ya"| G["Admin membuat permintaan refund"]
-    G --> H{"Refund sebagian?"}
-    H -->|"Ya"| I["Catat refund, pesanan tetap Lunas/Selesai"]
-    I --> J["KDS tidak berubah"]
-    H -->|"Tidak"| K{"Tiket KDS masih aktif?"}
-    K -->|"Tidak, pesanan sudah Selesai"| L["Pesanan Refund"]
-    K -->|"Ya"| M["Approval admin"]
-    M -->|"Ditolak"| N["Refund gagal, tiket tetap"]
-    M -->|"Disetujui"| O["Hentikan tiket + notifikasi dapur"]
-    O --> P["Pesanan Refund, antrean dihentikan"]
-    N --> Q["Audit penolakan"]
+    A["Pesanan Lunas / Selesai"] --> B["Admin Buka Refund Modal"]
+    B --> C{"Pilih Metode Refund"}
+    C -->|"Tunai / QRIS / Transfer"| D["Validasi Saldo & Anti-Overlap"]
+    C -->|"Midtrans"| E["Catat Refund status PENDING"]
+    E --> F["Approved_by = NULL\nSaldo dicadangkan (reserved)"]
+    F --> G["Verifikasi Gateway Server-Side"]
+    G --> H["RPC confirm_midtrans_refund_atomic\n(service_role only)"]
+    H --> I["Update status COMPLETED\nCatat gateway_refund_id & approved_by"]
+    D --> J["RPC process_order_refund_atomic"]
+    J --> K{"Refund Full atau Partial?"}
+    I --> K
+    K -->|"Partial"| L["Update orders.refunded_total\nPesanan tetap Paid / Completed\nKDS tidak berubah"]
+    K -->|"Full"| M["Update orders.refunded_total\nPesanan status REFUNDED"]
+    M --> N{"Tiket KDS Aktif?"}
+    N -->|"Ya"| O["Hentikan Tiket (kds_status = NULL)\nCatat cancelled_by/at & kitchen_notified_at"]
+    N -->|"Tidak (sudah Selesai)"| P["Tidak ada notifikasi KDS"]
+    L --> Q["Catat audit_logs"]
+    O --> Q
     P --> Q
-    L --> Q
 ```
 
 ### 9.5 Kondisi berhasil, gagal, dan batal

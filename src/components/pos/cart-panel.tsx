@@ -182,6 +182,18 @@ export function CartPanel({
             </Badge>
           </div>
         )}
+
+        {/* Additional Order Banner if Table is Occupied */}
+        {isDineIn && !activeOrderNumber && selectedTable?.status === "occupied" && (
+          <div className="rounded-lg bg-rose-500/10 border border-rose-500/30 p-2 text-xs flex items-center justify-between text-rose-800 dark:text-rose-300">
+            <span className="font-medium truncate mr-1">
+              Mode: <strong>Pesanan Tambahan</strong> (Sesi Meja {selectedTable.name})
+            </span>
+            <Badge variant="outline" className="text-[10px] h-4 shrink-0 border-rose-400">
+              Terisi
+            </Badge>
+          </div>
+        )}
       </CardHeader>
 
       {/* Cart Items List */}

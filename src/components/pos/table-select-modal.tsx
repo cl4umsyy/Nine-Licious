@@ -122,16 +122,15 @@ export function TableSelectModal({
                   <button
                     key={table.id}
                     type="button"
-                    disabled={isOccupied}
                     onClick={() => setTempSelectedTable(table)}
-                    className={`relative flex flex-col p-3 rounded-xl border text-left transition-all ${
+                    className={`relative flex flex-col p-3 rounded-xl border text-left transition-all cursor-pointer ${
                       isSelected
                         ? "border-primary ring-2 ring-primary/40 bg-brand-soft/30 shadow-md"
-                        : "border-border/80 bg-card hover:border-primary/50 hover:bg-muted/30 shadow-sm"
-                    } ${
-                      isOccupied
-                        ? "opacity-50 cursor-not-allowed bg-muted/40"
-                        : "cursor-pointer"
+                        : isOccupied
+                          ? "border-rose-300/80 bg-rose-50/20 hover:border-rose-400 hover:bg-rose-50/40 dark:bg-rose-950/20"
+                          : isAwaitingPayment
+                            ? "border-amber-300/80 bg-amber-50/20 hover:border-amber-400 hover:bg-amber-50/40 dark:bg-amber-950/20"
+                            : "border-border/80 bg-card hover:border-primary/50 hover:bg-muted/30 shadow-sm"
                     }`}
                   >
                     {/* Header: Table name & Shape */}
@@ -157,12 +156,17 @@ export function TableSelectModal({
                         STATUS_BADGE_CLASSES[table.status]
                       }`}
                     >
-                      {TABLE_STATUS_LABELS[table.status]}
+                      {isOccupied ? "Terisi (Pesanan Tambahan)" : TABLE_STATUS_LABELS[table.status]}
                     </Badge>
 
-                    {/* Note if awaiting payment */}
+                    {/* Note if awaiting payment or occupied */}
+                    {isOccupied && (
+                      <span className="text-[9px] text-rose-700 dark:text-rose-300 mt-1.5 leading-tight font-medium">
+                        Sesi aktif (bisa tambah pesanan)
+                      </span>
+                    )}
                     {isAwaitingPayment && (
-                      <span className="text-[9px] text-amber-700 dark:text-amber-300 mt-1.5 leading-tight">
+                      <span className="text-[9px] text-amber-700 dark:text-amber-300 mt-1.5 leading-tight font-medium">
                         Ada pesanan belum lunas
                       </span>
                     )}
@@ -193,9 +197,14 @@ export function TableSelectModal({
                     Meja ini memiliki pesanan aktif belum lunas. Item baru akan ditambahkan ke pesanan tersebut.
                   </span>
                 )}
+                {tempSelectedTable.status === "occupied" && (
+                  <span className="text-[11px] text-rose-600 dark:text-rose-400 font-medium">
+                    Meja terisi. Pesanan baru akan dibuat sebagai Pesanan Tambahan pada sesi meja yang sedang aktif.
+                  </span>
+                )}
               </div>
             ) : (
-              <span>Pilih salah satu meja yang kosong atau menunggu pembayaran.</span>
+              <span>Pilih salah satu meja yang kosong atau terisi untuk pesanan tambahan.</span>
             )}
           </div>
 
@@ -212,7 +221,9 @@ export function TableSelectModal({
             >
               {tempSelectedTable?.status === "awaiting_payment"
                 ? "Pilih (Tambah Item)"
-                : "Pilih Meja Ini"}
+                : tempSelectedTable?.status === "occupied"
+                  ? "Pilih (Pesanan Tambahan)"
+                  : "Pilih Meja Ini"}
             </Button>
           </div>
         </DialogFooter>

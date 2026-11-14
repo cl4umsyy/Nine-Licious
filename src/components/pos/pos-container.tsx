@@ -212,7 +212,7 @@ export function PosContainer({
     refreshIdempotencyKey();
   };
 
-  // Handle table selection with automatic detection of unpaid active orders
+  // Handle table selection with automatic detection of unpaid active orders or additional orders
   const handleSelectTable = async (table: DiningTable) => {
     setSelectedTable(table);
 
@@ -225,7 +225,15 @@ export function PosContainer({
         );
       } else {
         setActiveTableOrder(null);
+        toast.error(
+          `Tidak ditemukan pesanan aktif belum lunas pada Meja ${table.name}. Silakan pilih meja kembali.`,
+        );
       }
+    } else if (table.status === "occupied") {
+      setActiveTableOrder(null);
+      toast.info(
+        `Meja ${table.name} sedang terisi (occupied). Pesanan ini akan diproses sebagai Pesanan Tambahan pada sesi aktif meja.`,
+      );
     } else {
       setActiveTableOrder(null);
     }
@@ -244,6 +252,18 @@ export function PosContainer({
 
     if (orderType === "dine_in" && !selectedTable) {
       toast.error("Pilih meja terlebih dahulu untuk pesanan Dine-in.");
+      setIsTableModalOpen(true);
+      return;
+    }
+
+    if (
+      orderType === "dine_in" &&
+      selectedTable?.status === "awaiting_payment" &&
+      !activeTableOrder
+    ) {
+      toast.error(
+        `Meja "${selectedTable.name}" sedang menunggu pembayaran. Tidak dapat membuat pesanan baru; silakan pilih meja kembali untuk menambahkan item ke pesanan aktif.`,
+      );
       setIsTableModalOpen(true);
       return;
     }

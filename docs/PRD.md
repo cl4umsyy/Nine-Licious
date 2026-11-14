@@ -697,40 +697,41 @@ Struk minimal memuat:
 - kasir,
 - tanggal dan waktu.
 
-Pada F2, struk dicetak melalui **browser print**. Layout 58 mm dan 80 mm harus
-tersedia dan diuji. Integrasi ESC/POS atau printer thermal khusus **tidak wajib**
-pada F2 dan dapat dipertimbangkan pada fase berikutnya. Cetak ulang struk harus
-dicatat di audit.
+Pada F2, struk dicetak melalui **browser print** dengan dukungan layout thermal 58 mm dan 80 mm. Kontrak data struk disediakan oleh RPC terverifikasi `get_order_receipt_data(p_order_id)` yang mengembalikan JSON komprehensif (informasi resto, line items, modifier, catatan, subtotal, diskon terurai beserta approver diskon manual, pajak, service charge, grand total, riwayat pembayaran, kembalian tunai, riwayat refund selesai & pending, dan kalkulasi pembayaran bersih `net_paid`). Integrasi ESC/POS atau printer thermal khusus **tidak wajib** pada F2 dan dapat dipertimbangkan pada fase berikutnya. Cetak ulang struk harus dicatat di audit.
 
-**FR-BAYAR-06 — Refund**
+**FR-BAYAR-06 — Refund (F2.4 Contract)**
 
-- Refund hanya dapat dibuat dan disetujui admin. Kasir hanya melihat status.
-- Refund dapat penuh atau sebagian.
-- Refund tunai harus memengaruhi shift aktif; bila tidak ada shift aktif, admin
-  dapat mencatat pengeluaran tunai di luar shift.
-- Refund harus dicatat di `audit_logs` dan dapat direkonsiliasi.
-- **Refund penuh sebelum pesanan lunas**: bila belum ada pembayaran atau baru
-  **Sebagian Dibayar**, pesanan berstatus **Dibatalkan** dan pengembalian dana
-  (bila ada) dicatat. Tidak ada antrean atau tiket KDS yang perlu dihentikan.
-- **Refund penuh setelah pesanan lunas dan tiket KDS masih aktif**: pesanan
-  berstatus **Refund** dan wajib melalui persetujuan admin:
-  1. admin membuat permintaan refund dengan alasan;
-  2. admin melakukan approval eksplisit;
-  3. setelah disetujui, tiket KDS dihentikan dan dihapus dari papan aktif;
-  4. kitchen menerima notifikasi penghentian tiket;
-  5. antrean dihentikan dan hilang dari papan aktif;
-  6. permintaan, approval/penolakan, penghentian tiket, dan notifikasi dicatat
-     di audit log.
-- Tiket KDS dibuat saat pesanan lunas, sehingga refund penuh setelah lunas
-  sebelum pesanan **Selesai** selalu memiliki tiket KDS aktif sampai refund
-  disetujui.
-- **Refund penuh setelah pesanan Selesai**: pesanan berstatus **Refund** dan
-  tetap wajib approval admin. Tiket KDS sudah tidak aktif, sehingga tidak ada
-  notifikasi penghentian tiket; refund dan approval tetap dicatat di audit log.
-- Sistem menolak approval refund dari pengguna non-admin.
-- Refund sebagian tidak menghentikan tiket KDS dan tidak mengubah status KDS;
-  pesanan tetap **Lunas** atau **Selesai** dan refund dicatat pada riwayat
-  pembayaran.
+- **Hak Akses & Otorisasi**: Refund hanya dapat dibuat dan disetujui admin (`profiles.role = 'admin'`). Kasir hanya dapat melihat status. Pengguna non-admin ditolak di tingkat RPC dan RLS database.
+- **Validasi Nominal & Jenis**:
+  - Alasan refund wajib diisi minimal 3 karakter.
+  - Nominal refund harus berupa integer positif (> 0).
+  - Mendukung refund penuh (`full`) dan sebagian (`partial`).
+  - Total refund kumulatif (termasuk refund berstatus `pending`) tidak boleh melebihi sisa dana yang dapat direfund (`paid_total - refunded_total - pending_reservations`).
+  - Refund parsial yang menghabiskan seluruh sisa tagihan ditolak dan diarahkan menggunakan refund `full`.
+- **Dukungan Metode Pembayaran & Split Bill**:
+  - Mendukung metode pembayaran tunai (`cash`), QRIS manual (`qris_manual`), transfer manual (`transfer`), dan Midtrans (`midtrans`).
+  - Pada split bill, refund dapat diarahkan ke pembayaran tertentu (`payment_id`).
+  - Akumulasi refund pada baris pembayaran tertentu diverifikasi terhadap nominal pembayaran tersebut; status pembayaran diubah menjadi `refunded` secara otomatis hanya ketika akumulasi refund selesai $\ge$ nominal pembayaran.
+- **Midtrans Refund & Server-Side Confirmation**:
+  - Permintaan refund untuk metode Midtrans tidak mempercayai parameter konfirmasi dari client (tanpa `p_gateway_confirmed`).
+  - Status refund Midtrans pertama kali dicatat sebagai `pending` dengan `approved_by = NULL` dan `approved_at = NULL`.
+  - Konfirmasi refund Midtrans diproses secara terpisah dan eksklusif melalui RPC `confirm_midtrans_refund_atomic` yang hanya dapat dieksekusi oleh `service_role` setelah validasi server-side atau webhook gateway tepercaya.
+- **Anti-Overlap Pending Reservation**:
+  - Refund pending secara atomik mengalokasikan (reserve) saldo order yang dapat direfund untuk mencegah tumpang tindih transaksi refund paralel pada saldo yang sama.
+- **Penghentian Tiket KDS Aktif**:
+  - Refund penuh pada pesanan yang sudah lunas menghentikan tiket KDS aktif secara atomik: status KDS direset (`orders.kds_status = NULL`), waktu pembatalan (`cancelled_at = now()`), pembatal (`cancelled_by = admin_id`), dan waktu notifikasi dapur (`refunds.kitchen_notified_at = now()`) dicatat.
+  - Refund sebagian tidak menghentikan tiket KDS dan mempertahankan status pesanan.
+- **Kepatuhan Deadlock & Locking Hierarchy**:
+  - Seluruh RPC refund wajib mengikuti hierarki kunci kanonikal: $L_1 (\text{dining\_tables}) \to L_2 (\text{dining\_sessions}) \to L_3 (\text{orders}) \to L_4 (\text{order\_allocations}) \to L_5 (\text{midtrans\_transactions}) \to L_6 (\text{payments}) \to L_7 (\text{refunds})$.
+- **Keamanan Data & Privilese Database**:
+  - Tabel `public.refunds` diproteksi RLS ketat tanpa izin `INSERT/UPDATE/DELETE` langsung untuk user biasa.
+  - Seluruh mutasi hanya dapat terjadi melalui RPC atomik (`SECURITY DEFINER`).
+  - Fungsi `generate_refund_number()` hanya dapat dieksekusi oleh `service_role`.
+- **Dampak Sesi Meja & Shift**:
+  - Pesanan yang direfund penuh tidak lagi menghalangi penutupan sesi meja pada `close_dining_session_atomic`.
+  - Refund tunai dicatat untuk integrasi modul shift (F5).
+- **Audit Logging**:
+  - Setiap refund yang diproses (`process_order_refund_atomic`) dan dikonfirmasi (`confirm_midtrans_refund_atomic`) dicatat ke `audit_logs` secara komprehensif.
 
 **FR-BAYAR-07 — Diskon, pajak, dan service charge**
 
