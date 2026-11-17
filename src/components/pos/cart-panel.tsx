@@ -73,15 +73,15 @@ export function CartPanel({
     cart.length > 0 && (!isDineIn || selectedTable !== null) && !isSubmitting;
 
   return (
-    <Card className="flex flex-col h-full border-border/80 shadow-sm overflow-hidden bg-card">
+    <Card className="flex flex-col h-full min-h-0 border-border/80 shadow-sm overflow-hidden bg-card">
       {/* Header: Order Type Switcher & Table Indicator */}
-      <CardHeader className="p-4 pb-3 border-b bg-muted/20 space-y-3 shrink-0">
+      <CardHeader className="p-3 pb-2 border-b bg-muted/20 space-y-2 shrink-0">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <ShoppingBag className="size-4 text-primary" />
             <h2 className="font-display font-bold text-base">Keranjang Pesanan</h2>
           </div>
-          <Badge variant="outline" className="text-xs h-6 px-2">
+          <Badge variant="outline" className="text-xs h-6 px-2.5 font-semibold">
             {totals.itemsCount} item
           </Badge>
         </div>
@@ -93,8 +93,8 @@ export function CartPanel({
             variant={isDineIn ? "default" : "ghost"}
             size="sm"
             onClick={() => onOrderTypeChange("dine_in")}
-            className={`h-8 text-xs font-semibold rounded-lg ${
-              isDineIn ? "bg-primary text-primary-foreground shadow-sm" : ""
+            className={`h-8 text-xs font-semibold rounded-lg transition-all ${
+              isDineIn ? "bg-primary text-primary-foreground shadow-xs" : "hover:bg-background/80"
             }`}
           >
             <UtensilsCrossed className="size-3.5 mr-1.5" />
@@ -106,8 +106,8 @@ export function CartPanel({
             variant={!isDineIn ? "default" : "ghost"}
             size="sm"
             onClick={() => onOrderTypeChange("takeaway")}
-            className={`h-8 text-xs font-semibold rounded-lg ${
-              !isDineIn ? "bg-primary text-primary-foreground shadow-sm" : ""
+            className={`h-8 text-xs font-semibold rounded-lg transition-all ${
+              !isDineIn ? "bg-primary text-primary-foreground shadow-xs" : "hover:bg-background/80"
             }`}
           >
             <ShoppingBag className="size-3.5 mr-1.5" />
@@ -123,10 +123,10 @@ export function CartPanel({
               variant="outline"
               size="sm"
               onClick={onOpenTableModal}
-              className={`w-full justify-between h-9 text-xs font-medium border ${
+              className={`w-full justify-between h-8.5 text-xs font-medium border rounded-lg transition-colors ${
                 selectedTable
-                  ? "border-primary/40 bg-brand-soft/20 text-foreground"
-                  : "border-dashed border-amber-500/50 text-amber-900 bg-amber-50/50 dark:text-amber-200 dark:bg-amber-950/30"
+                  ? "border-primary/40 bg-brand-soft/20 text-foreground hover:bg-brand-soft/30"
+                  : "border-dashed border-amber-500/50 text-amber-900 bg-amber-50/50 dark:text-amber-200 dark:bg-amber-950/30 hover:bg-amber-100/50"
               }`}
             >
               <div className="flex items-center gap-1.5 truncate">
@@ -151,7 +151,7 @@ export function CartPanel({
                 placeholder="Nama Pelanggan (opsional)"
                 value={customerName}
                 onChange={(e) => onCustomerNameChange(e.target.value)}
-                className="pl-8 h-8 text-xs"
+                className="pl-8 h-8 text-xs rounded-lg"
                 maxLength={80}
               />
             </div>
@@ -166,7 +166,7 @@ export function CartPanel({
             placeholder="Catatan pesanan keseluruhan (opsional)"
             value={orderNotes}
             onChange={(e) => onOrderNotesChange(e.target.value)}
-            className="pl-8 h-8 text-xs"
+            className="pl-8 h-8 text-xs rounded-lg"
             maxLength={200}
           />
         </div>
@@ -197,19 +197,19 @@ export function CartPanel({
       </CardHeader>
 
       {/* Cart Items List */}
-      <CardContent className="flex-1 overflow-y-auto p-4 space-y-3">
+      <CardContent className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2">
         {cart.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-center p-6 text-muted-foreground space-y-2">
-            <div className="flex size-12 items-center justify-center rounded-full bg-muted/60 text-muted-foreground/60">
-              <ShoppingBag className="size-6" />
+          <div className="flex flex-col items-center justify-center h-full text-center p-4 text-muted-foreground space-y-2">
+            <div className="flex size-11 items-center justify-center rounded-full bg-muted/60 text-muted-foreground/60">
+              <ShoppingBag className="size-5" />
             </div>
-            <p className="font-semibold text-sm">Keranjang masih kosong</p>
-            <p className="text-xs max-w-[200px]">
+            <p className="font-semibold text-xs sm:text-sm">Keranjang masih kosong</p>
+            <p className="text-[11px] max-w-[200px]">
               Pilih menu dari katalog di sebelah kiri untuk menyusun pesanan.
             </p>
           </div>
         ) : (
-          <div className="space-y-2.5">
+          <div className="space-y-2">
             {cart.map((item) => {
               const itemSubtotal = calculateItemSubtotal(item);
               const appliedItemDiscount = totals.appliedDiscounts.find(
@@ -219,14 +219,14 @@ export function CartPanel({
               return (
                 <div
                   key={item.id}
-                  className="group flex flex-col p-3 rounded-xl border bg-card/60 hover:bg-muted/20 transition-all text-xs space-y-2"
+                  className="group flex flex-col p-3 rounded-xl border bg-card hover:bg-muted/15 transition-all text-xs space-y-2 shadow-2xs"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="space-y-0.5 flex-1 min-w-0">
                       <div className="font-bold text-sm text-foreground truncate">
                         {item.productName}
                       </div>
-                      <div className="text-muted-foreground font-medium">
+                      <div className="text-muted-foreground font-medium text-xs">
                         {formatRupiah(item.unitPrice)}
                       </div>
                     </div>
@@ -276,41 +276,44 @@ export function CartPanel({
 
                   {/* Special Notes */}
                   {item.notes && (
-                    <p className="text-[11px] italic text-muted-foreground bg-muted/40 p-1.5 rounded">
+                    <p className="text-[11px] italic text-muted-foreground bg-muted/40 p-1.5 rounded-md">
                       &ldquo;{item.notes}&rdquo;
                     </p>
                   )}
 
                   {/* Stepper & Delete */}
-                  <div className="flex items-center justify-between pt-1">
+                  <div className="flex items-center justify-between pt-1 border-t border-border/40 mt-1">
                     <button
                       type="button"
                       onClick={() => onRemoveItem(item.id)}
-                      className="text-muted-foreground hover:text-destructive p-1 rounded transition-colors"
+                      className="inline-flex items-center gap-1.5 text-muted-foreground hover:text-destructive p-1 rounded-md transition-colors text-xs"
                       aria-label="Hapus item"
                     >
                       <Trash2 className="size-3.5" />
+                      <span className="text-[11px] hidden sm:inline">Hapus</span>
                     </button>
 
-                    <div className="flex items-center border rounded-lg bg-background">
+                    <div className="flex items-center border rounded-lg bg-background shadow-2xs">
                       <Button
                         type="button"
                         variant="ghost"
                         size="icon"
-                        className="size-7"
+                        className="size-7 rounded-l-lg hover:bg-muted"
                         onClick={() => onUpdateQuantity(item.id, -1)}
+                        aria-label="Kurangi jumlah"
                       >
                         <Minus className="size-3" />
                       </Button>
-                      <span className="w-7 text-center font-bold text-xs font-mono">
+                      <span className="w-8 text-center font-bold text-xs font-mono select-none">
                         {item.quantity}
                       </span>
                       <Button
                         type="button"
                         variant="ghost"
                         size="icon"
-                        className="size-7"
+                        className="size-7 rounded-r-lg hover:bg-muted"
                         onClick={() => onUpdateQuantity(item.id, 1)}
+                        aria-label="Tambah jumlah"
                       >
                         <Plus className="size-3" />
                       </Button>
@@ -324,17 +327,17 @@ export function CartPanel({
       </CardContent>
 
       {/* Footer: Order Calculation & Submit Action */}
-      <CardFooter className="flex-col p-4 border-t bg-muted/20 space-y-3 shrink-0">
+      <CardFooter className="flex-col p-3 border-t bg-muted/20 space-y-2 shrink-0">
         {/* Diskon & Promo Quick Button */}
         <Button
           type="button"
           variant="outline"
           size="sm"
           onClick={onOpenDiscountModal}
-          className={`w-full justify-between h-8 text-xs font-medium border ${
+          className={`w-full justify-between h-8 text-xs font-medium border rounded-lg transition-colors ${
             totals.discountTotal > 0
-              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-              : "border-border/80 text-foreground"
+              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/15"
+              : "border-border/80 text-foreground hover:bg-muted/50"
           }`}
         >
           <div className="flex items-center gap-1.5 truncate">
@@ -342,8 +345,7 @@ export function CartPanel({
             <span className="truncate">
               {totals.discountTotal > 0 ? (
                 <>
-                  Diskon Aktif:{" "}
-                  <strong>-{formatRupiah(totals.discountTotal)}</strong>
+                  Diskon: <strong>-{formatRupiah(totals.discountTotal)}</strong>
                   {selectedOrderPromoName && ` (${selectedOrderPromoName})`}
                   {hasManualDiscount && " [Manual]"}
                 </>
@@ -355,7 +357,7 @@ export function CartPanel({
           <ChevronRight className="size-3.5 text-muted-foreground shrink-0" />
         </Button>
 
-        <div className="w-full space-y-1.5 text-xs">
+        <div className="w-full space-y-1 text-xs">
           <div className="flex items-center justify-between text-muted-foreground">
             <span>Subtotal</span>
             <span className="font-mono font-medium">
@@ -403,7 +405,7 @@ export function CartPanel({
                 </span>
               </div>
               <div className="flex items-center justify-between text-[11px] text-muted-foreground pt-0.5">
-                <span>Dasar Kena Pajak (Taxable Base)</span>
+                <span>Dasar Kena Pajak</span>
                 <span className="font-mono">
                   {formatRupiah(totals.taxableBase)}
                 </span>
@@ -425,7 +427,7 @@ export function CartPanel({
             </span>
           </div>
 
-          <Separator className="my-1.5" />
+          <Separator className="my-1" />
 
           <div className="flex items-center justify-between text-sm font-bold">
             <span>Grand Total</span>
@@ -437,21 +439,21 @@ export function CartPanel({
 
         {/* Warning if Dine-in without Table */}
         {isDineIn && !selectedTable && cart.length > 0 && (
-          <p className="text-[11px] text-amber-600 dark:text-amber-400 font-medium text-center">
+          <p className="text-[11px] text-amber-600 dark:text-amber-400 font-medium text-center bg-amber-50/60 dark:bg-amber-950/30 p-1 rounded-md border border-amber-500/20">
             Pilih meja terlebih dahulu untuk menyelesaikan pesanan Dine-in.
           </p>
         )}
 
-        {/* Buttons */}
-        <div className="w-full flex items-center gap-2">
+        {/* Action Buttons: Reset & Simpan Pesanan with generous spacing */}
+        <div className="w-full flex items-center gap-2.5 pt-0.5">
           {cart.length > 0 && (
             <Button
               type="button"
               variant="outline"
-              size="sm"
+              size="default"
               onClick={onClearCart}
               disabled={isSubmitting}
-              className="text-xs px-2.5 text-muted-foreground hover:text-destructive"
+              className="h-10 px-3.5 text-xs font-semibold rounded-xl text-muted-foreground hover:text-destructive hover:bg-destructive/10 border-border/80 transition-colors shrink-0"
             >
               Reset
             </Button>
@@ -462,7 +464,7 @@ export function CartPanel({
             size="lg"
             disabled={!canSubmit}
             onClick={onSubmitOrder}
-            className="flex-1 font-bold text-sm h-11 bg-primary text-primary-foreground shadow hover:bg-primary/95"
+            className="flex-1 font-bold text-xs sm:text-sm h-10 rounded-xl bg-primary text-primary-foreground shadow-sm hover:bg-primary/95 transition-all"
           >
             {isSubmitting ? (
               <>

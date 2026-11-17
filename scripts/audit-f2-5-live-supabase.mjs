@@ -41,7 +41,7 @@ async function runDeepLiveAudit() {
   }
 
   // 2. Cek kolom orders.refunded_total
-  const { data: orderCol, error: colErr } = await adminClient
+  const { error: colErr } = await adminClient
     .from("orders")
     .select("id, refunded_total")
     .limit(1);

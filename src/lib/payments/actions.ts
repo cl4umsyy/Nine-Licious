@@ -9,11 +9,16 @@ import type {
   RefundProcessingResult,
 } from "@/lib/payments/types";
 import {
+  createSnapPaymentSchema,
   fieldErrorsFrom,
   firstZodError,
   manualPaymentSchema,
   processRefundSchema,
 } from "@/lib/payments/validation";
+import { createSnapPayment } from "@/lib/midtrans/service";
+import { reconcileActiveMidtransPayment } from "@/lib/midtrans/reconcile";
+import type { CreateSnapTransactionResult } from "@/lib/midtrans/types";
+import type { MidtransSplitBillType } from "@/types/database";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import type { Order } from "@/types/database";
@@ -365,4 +370,250 @@ export async function getOrderReceiptDataAction(
     data: rpcResult as unknown as ReceiptData,
   };
 }
+
+/**
+ * Membuat transaksi Midtrans Snap token di server untuk kasir POS.
+ *
+ * Persyaratan Keamanan F2.2 & TAHAP 3:
+ * 1. Hanya Admin dan Kasir aktif yang berhak memicu pembayaran online.
+ * 2. Pesanan wajib sudah difinalisasi (is_finalized = true).
+ * 3. Token Snap dibuat di sisi server melalui createSnapPayment tanpa mengekspos Server Key.
+ * 4. Kunci idempotensi unik per sesi pembayaran mencegah duplikasi reservasi gateway.
+ */
+export async function createPosMidtransSnapAction(
+  rawInput: unknown,
+): Promise<PaymentActionResult<CreateSnapTransactionResult>> {
+  // 1. Otorisasi Kasir atau Admin
+  const cashierActor = await getCashierActor();
+  if (!cashierActor.ok) {
+    return { ok: false, message: cashierActor.message };
+  }
+
+  // 2. Validasi Skema Zod
+  const parsed = createSnapPaymentSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      message: firstZodError(parsed.error),
+      fieldErrors: fieldErrorsFrom(parsed.error),
+    };
+  }
+
+  const input = parsed.data;
+
+  // 3. Klien Supabase Terautentikasi
+  const supabase = await createSupabaseServerClient();
+  if (!supabase) {
+    return { ok: false, message: "Klien database tidak tersedia." };
+  }
+
+  // 4. Validasi Pra-kondisi Pesanan
+  const { data: order, error: orderErr } = await supabase
+    .from("orders")
+    .select("*")
+    .eq("id", input.orderId)
+    .maybeSingle<Order>();
+
+  if (orderErr || !order) {
+    return { ok: false, message: "Pesanan tidak ditemukan di database." };
+  }
+
+  if (!order.is_finalized) {
+    return {
+      ok: false,
+      message:
+        "Pesanan belum difinalisasi. Finalisasi pesanan terlebih dahulu sebelum memproses pembayaran.",
+    };
+  }
+
+  if (order.status === "cancelled") {
+    return {
+      ok: false,
+      message: `Pesanan ${order.order_number} sudah dibatalkan dan tidak dapat menerima pembayaran.`,
+    };
+  }
+
+  if (order.status === "paid" || order.payment_status === "paid") {
+    return {
+      ok: false,
+      message: `Pesanan ${order.order_number} sudah lunas sebelumnya.`,
+    };
+  }
+
+  const remainingBalance = order.grand_total - order.paid_total;
+  if (input.grossAmount > remainingBalance) {
+    return {
+      ok: false,
+      message: `Nominal transaksi (Rp ${input.grossAmount.toLocaleString("id-ID")}) melebihi sisa tagihan (Rp ${remainingBalance.toLocaleString("id-ID")}).`,
+    };
+  }
+
+  // 5. Eksekusi Service Midtrans Snap di Server-Side
+  const snapResult = await createSnapPayment({
+    orderId: order.id,
+    orderNumber: order.order_number,
+    grossAmount: input.grossAmount,
+    idempotencyKey: input.idempotencyKey,
+    customerName: order.customer_name,
+    isSplitBill: input.isSplitBill,
+    splitBillType: (input.splitBillType ?? undefined) as MidtransSplitBillType | undefined,
+    itemAllocations: input.itemAllocations ?? undefined,
+  });
+
+  if (!snapResult.ok) {
+    return {
+      ok: false,
+      message: snapResult.error || "Gagal membuat transaksi Midtrans Snap.",
+    };
+  }
+
+  return {
+    ok: true,
+    message: "Transaksi Midtrans Snap berhasil dibuat.",
+    data: snapResult,
+  };
+}
+
+/**
+ * Mengambil status pembayaran terkini dari pesanan untuk verifikasi terpercaya (polling / refresh).
+ * Jika pesanan belum lunas dan terdapat transaksi Midtrans, melakukan rekonsiliasi aktif
+ * langsung ke Midtrans Core API menggunakan Server Key resmi.
+ */
+export async function getOrderPaymentStatusAction(
+  orderId: string,
+): Promise<
+  PaymentActionResult<{
+    orderId: string;
+    orderNumber: string;
+    status: string;
+    paymentStatus: string;
+    paidTotal: number;
+    grandTotal: number;
+    remainingBalance: number;
+    isSettled: boolean;
+    queueNumber?: string | null;
+    activeSnapToken?: string | null;
+    activeMidtransOrderId?: string | null;
+    midtransStatus?: string | null;
+    reconciliationMessage?: string | null;
+  }>
+> {
+  const cashierActor = await getCashierActor();
+  if (!cashierActor.ok) {
+    return { ok: false, message: cashierActor.message };
+  }
+
+  if (!orderId || typeof orderId !== "string") {
+    return { ok: false, message: "ID pesanan tidak valid." };
+  }
+
+  const supabase = await createSupabaseServerClient();
+  if (!supabase) {
+    return { ok: false, message: "Klien database tidak tersedia." };
+  }
+
+  const { data: order, error } = await supabase
+    .from("orders")
+    .select("id, order_number, status, payment_status, paid_total, grand_total, queue_number")
+    .eq("id", orderId)
+    .maybeSingle<{
+      id: string;
+      order_number: string;
+      status: string;
+      payment_status: string;
+      paid_total: number;
+      grand_total: number;
+      queue_number: string | null;
+    }>();
+
+  if (error || !order) {
+    return { ok: false, message: "Pesanan tidak ditemukan." };
+  }
+
+  const isInitialSettled = order.payment_status === "paid" || order.status === "paid";
+
+  // Ambil transaksi Midtrans terakhir jika ada (untuk token Snap & info rekonsiliasi)
+  let activeSnapToken: string | null = null;
+  let activeMidtransOrderId: string | null = null;
+  let midtransStatus: string | null = null;
+  let reconciliationMessage: string | null = null;
+
+  const adminClient = createSupabaseAdminClient();
+  if (adminClient) {
+    const { data: latestMidtransTx } = await adminClient
+      .from("midtrans_transactions")
+      .select("midtrans_order_id, snap_token, lifecycle_status, payment_expires_at")
+      .eq("order_id", orderId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (latestMidtransTx) {
+      activeMidtransOrderId = latestMidtransTx.midtrans_order_id;
+      // Sediakan token untuk dibuka ulang jika masih aktif/pending
+      if (
+        latestMidtransTx.lifecycle_status === "token_created" ||
+        latestMidtransTx.lifecycle_status === "pending"
+      ) {
+        activeSnapToken = latestMidtransTx.snap_token;
+      }
+    }
+  }
+
+  // Jika pesanan belum berstatus lunas dan terdapat transaksi Midtrans, lakukan rekonsiliasi aktif
+  let currentSettled = isInitialSettled;
+  let currentPaidTotal = order.paid_total;
+  let currentStatus = order.status;
+  let currentPaymentStatus = order.payment_status;
+
+  if (!currentSettled && activeMidtransOrderId) {
+    const reconcileResult = await reconcileActiveMidtransPayment({ orderId });
+    if (reconcileResult.ok) {
+      midtransStatus = reconcileResult.midtransStatus ?? null;
+      reconciliationMessage = reconcileResult.message ?? null;
+
+      if (reconcileResult.isSettled) {
+        // Ambil data pesanan segar setelah mutasi settlement atomik di PostgreSQL
+        const { data: refreshedOrder } = await supabase
+          .from("orders")
+          .select("id, order_number, status, payment_status, paid_total, grand_total, queue_number")
+          .eq("id", orderId)
+          .maybeSingle();
+
+        if (refreshedOrder) {
+          currentSettled =
+            refreshedOrder.payment_status === "paid" || refreshedOrder.status === "paid";
+          currentPaidTotal = refreshedOrder.paid_total;
+          currentStatus = refreshedOrder.status;
+          currentPaymentStatus = refreshedOrder.payment_status;
+        }
+      }
+    } else {
+      reconciliationMessage = reconcileResult.error ?? null;
+    }
+  }
+
+  const remainingBalance = Math.max(0, order.grand_total - currentPaidTotal);
+
+  return {
+    ok: true,
+    message: currentSettled ? "Pesanan lunas terverifikasi." : "Pesanan belum lunas.",
+    data: {
+      orderId: order.id,
+      orderNumber: order.order_number,
+      status: currentStatus,
+      paymentStatus: currentPaymentStatus,
+      paidTotal: currentPaidTotal,
+      grandTotal: order.grand_total,
+      remainingBalance,
+      isSettled: currentSettled,
+      queueNumber: order.queue_number,
+      activeSnapToken,
+      activeMidtransOrderId,
+      midtransStatus,
+      reconciliationMessage,
+    },
+  };
+}
+
 

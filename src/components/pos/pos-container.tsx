@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
+import { ChevronRight, ShoppingBag, Utensils } from "lucide-react";
 import { toast } from "sonner";
 import { CartPanel } from "@/components/pos/cart-panel";
 import {
@@ -10,9 +11,14 @@ import {
 import { ModifierModal } from "@/components/pos/modifier-modal";
 import { OrderCancelModal } from "@/components/pos/order-cancel-modal";
 import { OrderConfirmationModal } from "@/components/pos/order-confirmation-modal";
+import { PaymentModal } from "@/components/pos/payment-modal";
 import { ProductCatalog } from "@/components/pos/product-catalog";
+import { ReceiptModal } from "@/components/pos/receipt-modal";
 import { TableSelectModal } from "@/components/pos/table-select-modal";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { calculateCartTotalsWithDiscounts } from "@/lib/discounts/calculations";
+import { formatRupiah } from "@/lib/menu/format";
 import {
   createPosOrderAction,
   getActiveOrderForTableAction,
@@ -22,6 +28,7 @@ import type {
   OrderWithDetails,
   ProductWithModifiers,
 } from "@/lib/orders/types";
+import { cn } from "@/lib/utils";
 import type {
   DiningTable,
   Discount,
@@ -94,8 +101,13 @@ export function PosContainer({
   const [isTableModalOpen, setIsTableModalOpen] = useState(false);
   const [confirmedOrder, setConfirmedOrder] =
     useState<OrderWithDetails | null>(null);
+  const [paymentOrder, setPaymentOrder] =
+    useState<OrderWithDetails | null>(null);
+  const [receiptOrderId, setReceiptOrderId] =
+    useState<string | null>(null);
   const [orderToCancel, setOrderToCancel] =
     useState<OrderWithDetails | null>(null);
+  const [mobileTab, setMobileTab] = useState<"catalog" | "cart">("catalog");
 
   const [isSubmitting, startSubmitting] = useTransition();
 
@@ -316,9 +328,52 @@ export function PosContainer({
 
   return (
     <>
-      <div className="grid gap-4 lg:grid-cols-[1fr_380px] xl:grid-cols-[1fr_420px] h-[calc(100vh-140px)] min-h-[580px]">
+      {/* Mobile Tab Switcher */}
+      <div className="flex lg:hidden items-center justify-between p-1 bg-muted/60 rounded-xl border mb-3">
+        <button
+          type="button"
+          onClick={() => setMobileTab("catalog")}
+          className={cn(
+            "flex-1 py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5",
+            mobileTab === "catalog"
+              ? "bg-card text-foreground shadow-xs"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <Utensils className="size-3.5" />
+          Katalog Menu ({products.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => setMobileTab("cart")}
+          className={cn(
+            "flex-1 py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5",
+            mobileTab === "cart"
+              ? "bg-card text-primary shadow-xs"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <ShoppingBag className="size-3.5" />
+          Keranjang
+          {totals.itemsCount > 0 && (
+            <Badge
+              variant="default"
+              className="text-[10px] h-4.5 px-1.5 bg-primary text-primary-foreground font-mono"
+            >
+              {totals.itemsCount}
+            </Badge>
+          )}
+        </button>
+      </div>
+
+      <div className="flex-1 min-h-0 flex flex-col lg:grid lg:grid-cols-[1fr_380px] xl:grid-cols-[1fr_420px] gap-3">
         {/* Left: Product Catalog */}
-        <div className="h-full overflow-hidden flex flex-col">
+        <div
+          className={cn(
+            "h-full min-h-0 overflow-hidden flex flex-col",
+            mobileTab !== "catalog" && "hidden lg:flex",
+          )}
+        >
           <ProductCatalog
             products={products}
             categories={categories}
@@ -327,7 +382,12 @@ export function PosContainer({
         </div>
 
         {/* Right: Cart Panel */}
-        <div className="h-full overflow-hidden flex flex-col">
+        <div
+          className={cn(
+            "h-full min-h-0 overflow-hidden flex flex-col",
+            mobileTab !== "cart" && "hidden lg:flex",
+          )}
+        >
           <CartPanel
             cart={cart}
             orderType={orderType}
@@ -351,6 +411,31 @@ export function PosContainer({
           />
         </div>
       </div>
+
+      {/* Mobile Floating Cart Summary Button */}
+      {mobileTab === "catalog" && cart.length > 0 && (
+        <div className="lg:hidden fixed bottom-4 left-4 right-4 z-40">
+          <Button
+            type="button"
+            onClick={() => setMobileTab("cart")}
+            className="w-full h-12 shadow-lg bg-primary text-primary-foreground font-bold text-sm rounded-2xl flex items-center justify-between px-4"
+          >
+            <div className="flex items-center gap-2">
+              <Badge
+                variant="secondary"
+                className="bg-primary-foreground/20 text-primary-foreground text-xs font-mono"
+              >
+                {totals.itemsCount} item
+              </Badge>
+              <span>Lihat Keranjang</span>
+            </div>
+            <div className="flex items-center gap-1 font-mono">
+              <span>{formatRupiah(totals.grandTotal)}</span>
+              <ChevronRight className="size-4" />
+            </div>
+          </Button>
+        </div>
+      )}
 
       {/* Modals */}
       <DiscountModal
@@ -386,11 +471,52 @@ export function PosContainer({
         isOpen={confirmedOrder !== null}
         onClose={() => setConfirmedOrder(null)}
         userRole={userRole}
-        onOrderUpdated={(updated) => setConfirmedOrder(updated)}
+        onOrderUpdated={(updated) => {
+          setConfirmedOrder(updated);
+          if (paymentOrder?.id === updated.id) {
+            setPaymentOrder(updated);
+          }
+        }}
         onOpenCancel={(order) => {
           setConfirmedOrder(null);
           setOrderToCancel(order);
         }}
+        onOpenPayment={(order) => {
+          setConfirmedOrder(null);
+          setPaymentOrder(order);
+        }}
+        onOpenReceipt={(orderId) => {
+          setReceiptOrderId(orderId);
+        }}
+      />
+
+      <PaymentModal
+        order={paymentOrder}
+        isOpen={paymentOrder !== null}
+        onClose={() => {
+          if (paymentOrder) {
+            setConfirmedOrder(paymentOrder);
+          }
+          setPaymentOrder(null);
+        }}
+        onPaymentSuccess={(orderId, isSettled) => {
+          setPaymentOrder(null);
+          if (isSettled) {
+            setConfirmedOrder(null);
+            setReceiptOrderId(orderId);
+          } else {
+            toast.info("Pembayaran parsial berhasil dicatat.");
+            if (paymentOrder) {
+              setConfirmedOrder(paymentOrder);
+            }
+          }
+        }}
+      />
+
+      <ReceiptModal
+        orderId={receiptOrderId}
+        isOpen={receiptOrderId !== null}
+        onClose={() => setReceiptOrderId(null)}
       />
 
       <OrderCancelModal

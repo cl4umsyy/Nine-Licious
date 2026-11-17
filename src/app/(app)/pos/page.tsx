@@ -176,11 +176,11 @@ export default async function PosPage() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col flex-1 min-h-0 space-y-2.5">
       <PageHeader
-        eyebrow="Modul Kasir & Pemesanan"
         title="POS Utama"
-        description="Kelola pesanan Dine-in dan Takeaway, konfigurasi modifier, dan simpan pesanan Menunggu Pembayaran."
+        description="Kelola pesanan Dine-in dan Takeaway, konfigurasi modifier, dan proses pembayaran kasir."
+        className="shrink-0 py-0"
         actions={
           <div className="flex items-center gap-2">
             <Button asChild variant="outline" size="sm" className="h-8 text-xs">
@@ -190,7 +190,7 @@ export default async function PosPage() {
                 <ArrowRight className="size-3 ml-1" />
               </Link>
             </Button>
-            <Badge variant="outline" className="h-8 px-3 text-xs">
+            <Badge variant="outline" className="h-8 px-3 text-xs font-medium">
               {ROLE_LABELS[session.profile.role]}
             </Badge>
           </div>

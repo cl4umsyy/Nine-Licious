@@ -10,9 +10,11 @@ import {
   Lock,
   MapPin,
   PlusCircle,
+  Receipt,
   ShoppingBag,
   Unlock,
   UtensilsCrossed,
+  Wallet,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -57,6 +59,8 @@ export type OrderConfirmationModalProps = {
   onOpenCancel: (order: OrderWithDetails) => void;
   userRole?: string;
   onOrderUpdated?: (order: OrderWithDetails) => void;
+  onOpenPayment?: (order: OrderWithDetails) => void;
+  onOpenReceipt?: (orderId: string) => void;
 };
 
 export function OrderConfirmationModal({
@@ -66,6 +70,8 @@ export function OrderConfirmationModal({
   onOpenCancel,
   userRole = "kasir",
   onOrderUpdated,
+  onOpenPayment,
+  onOpenReceipt,
 }: OrderConfirmationModalProps) {
   const [currentOrder, setCurrentOrder] = useState<OrderWithDetails | null>(
     order,
@@ -205,9 +211,9 @@ export function OrderConfirmationModal({
                     variant="outline"
                     size="sm"
                     onClick={() => setIsUnfinalizeDialogOpen(true)}
-                    className="h-7 text-xs border-emerald-500/40 text-emerald-700 dark:text-emerald-300 bg-background/80 hover:bg-background shrink-0"
+                    className="h-8 px-3 text-xs font-semibold border-emerald-500/40 text-emerald-700 dark:text-emerald-300 bg-background/80 hover:bg-background shrink-0 rounded-lg gap-1.5"
                   >
-                    <Unlock className="size-3 mr-1" />
+                    <Unlock className="size-3.5" />
                     Buka Kembali
                   </Button>
                 )}
@@ -225,9 +231,9 @@ export function OrderConfirmationModal({
                   type="button"
                   size="sm"
                   onClick={() => setIsFinalizeAlertOpen(true)}
-                  className="h-7 text-xs font-bold bg-primary text-primary-foreground shrink-0 shadow-sm"
+                  className="h-8 px-3 text-xs font-bold bg-primary text-primary-foreground shrink-0 shadow-xs rounded-lg gap-1.5"
                 >
-                  <Lock className="size-3 mr-1" />
+                  <Lock className="size-3.5" />
                   Finalisasi Sekarang
                 </Button>
               </div>
@@ -400,48 +406,138 @@ export function OrderConfirmationModal({
               </div>
             </div>
 
-            {/* Handoff F2 Notice */}
-            <div className="rounded-xl border border-dashed border-primary/30 p-4 bg-brand-soft/20 space-y-2">
-              <div className="flex items-center gap-2">
-                <CreditCard className="size-4 text-primary" />
-                <h5 className="font-bold text-xs text-foreground">
-                  Handoff ke Sistem Pembayaran (F2)
-                </h5>
+            {/* Payment Section */}
+            {currentOrder.payment_status === "paid" ? (
+              <div className="rounded-xl border border-emerald-500/30 p-4 bg-emerald-500/10 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle className="size-4 text-emerald-600 dark:text-emerald-400" />
+                    <h5 className="font-bold text-xs text-foreground">
+                      Pembayaran Lunas
+                    </h5>
+                  </div>
+                  <Badge className="bg-emerald-600 text-white text-[10px]">
+                    LUNAS
+                  </Badge>
+                </div>
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  Tagihan pesanan ini sudah diselesaikan. Anda dapat melihat dan mencetak struk transaksi (58 mm / 80 mm).
+                </p>
+                {onOpenReceipt && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => onOpenReceipt(currentOrder.id)}
+                    className="w-full h-8 text-xs font-semibold border-emerald-500/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10"
+                  >
+                    <Receipt className="size-3.5 mr-1.5" />
+                    Lihat / Cetak Struk Transaksi
+                  </Button>
+                )}
               </div>
-              <p className="text-[11px] text-muted-foreground leading-relaxed">
-                Status pembayaran: <strong>Belum Lunas ({currentOrder.payment_status})</strong>. Pemrosesan pembayaran tunai, QRIS dinamis, integrasi Midtrans, dan penerbitan struk akan diimplementasikan pada milestone F2.
-              </p>
-              <Button
-                type="button"
-                disabled
-                className="w-full h-8 text-xs font-semibold cursor-not-allowed opacity-60"
-              >
-                <CreditCard className="size-3.5 mr-1.5" />
-                Proses Pembayaran (Tersedia pada F2)
-              </Button>
-            </div>
+            ) : currentOrder.status === "cancelled" ? (
+              <div className="rounded-xl border border-destructive/30 p-4 bg-destructive/10 space-y-1">
+                <div className="flex items-center gap-2">
+                  <Ban className="size-4 text-destructive" />
+                  <h5 className="font-bold text-xs text-destructive">
+                    Pesanan Dibatalkan
+                  </h5>
+                </div>
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  Pesanan ini telah dibatalkan dan tidak dapat menerima pembayaran.
+                </p>
+              </div>
+            ) : (
+              <div className="rounded-xl border border-primary/20 p-4 bg-primary/5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Wallet className="size-4 text-primary" />
+                    <h5 className="font-bold text-xs text-foreground">
+                      Sistem Pembayaran Kasir
+                    </h5>
+                  </div>
+                  <Badge
+                    variant="outline"
+                    className={`text-[10px] ${
+                      currentOrder.payment_status === "partially_paid"
+                        ? "border-amber-500 text-amber-600 bg-amber-50"
+                        : "border-primary/40 text-primary"
+                    }`}
+                  >
+                    {currentOrder.payment_status === "partially_paid"
+                      ? "Sebagian Dibayar"
+                      : "Belum Bayar"}
+                  </Badge>
+                </div>
+
+                {!isFinalized ? (
+                  <div className="space-y-2.5">
+                    <p className="text-[11px] text-muted-foreground leading-relaxed">
+                      Pesanan wajib <strong>difinalisasi</strong> terlebih dahulu sebelum pembayaran diproses agar rincian item, modifier, dan diskon terkunci.
+                    </p>
+                    <div className="flex items-center gap-3 pt-1">
+                      <Button
+                        type="button"
+                        size="default"
+                        onClick={() => setIsFinalizeAlertOpen(true)}
+                        className="flex-1 h-10 text-xs sm:text-sm font-bold bg-primary text-primary-foreground gap-2 rounded-xl shadow-xs"
+                      >
+                        <Lock className="size-4" />
+                        Finalisasi Sekarang
+                      </Button>
+                      <Button
+                        type="button"
+                        size="default"
+                        disabled
+                        variant="outline"
+                        className="h-10 px-4 text-xs font-semibold opacity-50 cursor-not-allowed rounded-xl"
+                      >
+                        <CreditCard className="size-4 mr-1.5" />
+                        Bayar
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2.5">
+                    <p className="text-[11px] text-muted-foreground leading-relaxed">
+                      Pesanan telah difinalisasi. Siap untuk diproses pembayaran melalui Tunai, Midtrans Snap QRIS / VA, QRIS manual, atau Split Bill.
+                    </p>
+                    <Button
+                      type="button"
+                      onClick={() => onOpenPayment?.(currentOrder)}
+                      className="w-full h-11 text-sm font-bold bg-primary text-primary-foreground shadow-sm hover:bg-primary/90 gap-2 rounded-xl"
+                    >
+                      <CreditCard className="size-4" />
+                      {currentOrder.payment_status === "partially_paid"
+                        ? "Lanjutkan Pembayaran"
+                        : "Proses Pembayaran"}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
-          {/* Footer */}
-          <DialogFooter className="p-4 border-t bg-muted/20 flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          {/* Footer with generous spacing and touch-friendly buttons */}
+          <DialogFooter className="p-4 sm:p-5 border-t bg-muted/20 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3">
             <Button
               type="button"
-              variant="ghost"
-              size="sm"
+              variant="outline"
+              size="default"
               onClick={() => onOpenCancel(currentOrder)}
-              className="text-xs text-destructive hover:bg-destructive/10 hover:text-destructive font-medium"
+              className="h-10 px-4 text-xs font-semibold text-destructive hover:bg-destructive/10 hover:text-destructive border-destructive/20 rounded-xl gap-2 transition-colors"
             >
-              <Ban className="size-3.5 mr-1.5" />
+              <Ban className="size-4" />
               Batalkan Pesanan
             </Button>
 
             <Button
               type="button"
-              size="sm"
+              size="default"
               onClick={onClose}
-              className="text-xs font-semibold"
+              className="h-10 px-5 text-xs font-bold rounded-xl gap-2 shadow-xs"
             >
-              <PlusCircle className="size-3.5 mr-1.5" />
+              <PlusCircle className="size-4" />
               Selesai / Pesanan Baru
             </Button>
           </DialogFooter>

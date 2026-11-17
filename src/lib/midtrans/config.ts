@@ -76,6 +76,69 @@ function resolveEnvironment(
   };
 }
 
+/**
+ * Validasi ketat kredensial Midtrans:
+ * - Sandbox mewajibkan pasangan Server Key 'SB-Mid-server-' dan Client Key 'SB-Mid-client-'.
+ * - Production mewajibkan pasangan Server Key 'Mid-server-' dan Client Key 'Mid-client-'.
+ * - Kredensial tidak boleh dicampur (misal server Sandbox tapi client Production).
+ */
+function validateCredentialsForEnvironment(
+  environment: MidtransEnvironment,
+  serverKey: string,
+  clientKey: string,
+): { ok: true } | { ok: false; error: string } {
+  const isServerSandbox = serverKey.startsWith("SB-Mid-server-") || serverKey.startsWith("SB-");
+  const isClientSandbox = clientKey.startsWith("SB-Mid-client-") || clientKey.startsWith("SB-");
+  const isServerProd = serverKey.startsWith("Mid-server-") && !isServerSandbox;
+  const isClientProd = clientKey.startsWith("Mid-client-") && !isClientSandbox;
+
+  // 1. Deteksi konflik pasangan kredensial (misal server Sandbox tapi client Production)
+  if ((isServerSandbox && isClientProd) || (isServerProd && isClientSandbox)) {
+    return {
+      ok: false,
+      error:
+        "Konfigurasi kredensial bertentangan: MIDTRANS_SERVER_KEY dan Client Key tidak boleh mencampur kredensial Sandbox dan Production.",
+    };
+  }
+
+  // 2. Validasi kesesuaian kredensial dengan environment yang dipilih
+  if (environment === "sandbox") {
+    if (isServerProd || isClientProd) {
+      return {
+        ok: false,
+        error:
+          "Konfigurasi Sandbox menolak kredensial Production. Gunakan Server Key dan Client Key Sandbox resmi yang berawalan 'SB-'.",
+      };
+    }
+
+    if (!isServerSandbox || !isClientSandbox) {
+      return {
+        ok: false,
+        error:
+          "Kredensial Sandbox tidak valid: MIDTRANS_SERVER_KEY harus berawalan 'SB-Mid-server-' dan Client Key harus berawalan 'SB-Mid-client-'.",
+      };
+    }
+  } else if (environment === "production") {
+    if (isServerSandbox || isClientSandbox) {
+      return {
+        ok: false,
+        error:
+          "Konfigurasi Production menolak kredensial Sandbox. Kredensial berawalan 'SB-' hanya boleh digunakan di mode Sandbox.",
+      };
+    }
+
+    if (!isServerProd || !isClientProd) {
+      return {
+        ok: false,
+        error:
+          "Kredensial Production tidak valid: MIDTRANS_SERVER_KEY harus berawalan 'Mid-server-' dan Client Key harus berawalan 'Mid-client-'.",
+      };
+    }
+  }
+
+  return { ok: true };
+}
+
 export type MidtransConfig = {
   environment: MidtransEnvironment;
   isProduction: boolean;
@@ -105,7 +168,8 @@ const SNAP_SCRIPT_URL: Record<MidtransEnvironment, string> = {
  * browser, and the environment must match the runtime:
  *
  * - development may only use Sandbox;
- * - production may only use Production.
+ * - production may only use Production, KECUALI jika MIDTRANS_ALLOW_SANDBOX=true
+ *   secara eksplisit disetel untuk mengizinkan testing Sandbox di deployment Vercel.
  *
  * Payment status must never be changed from a client callback. F2 must verify
  * the Midtrans webhook signature and re-fetch the transaction status before
@@ -115,6 +179,7 @@ export function getMidtransConfigState(): MidtransConfigState {
   const rawEnabled = blankToUndefined(process.env.MIDTRANS_ENABLED);
   const rawEnv = blankToUndefined(process.env.MIDTRANS_ENV);
   const rawIsProduction = blankToUndefined(process.env.MIDTRANS_IS_PRODUCTION);
+  const rawAllowSandbox = blankToUndefined(process.env.MIDTRANS_ALLOW_SANDBOX);
   const rawServerKey = blankToUndefined(process.env.MIDTRANS_SERVER_KEY);
   const rawClientKey = blankToUndefined(
     process.env.NEXT_PUBLIC_MIDTRANS_CLIENT_KEY || process.env.MIDTRANS_CLIENT_KEY,
@@ -140,25 +205,39 @@ export function getMidtransConfigState(): MidtransConfigState {
   }
 
   const environment = envResolution.environment;
-
+  const allowSandbox = rawAllowSandbox === "true";
   const runtimeProduction = process.env.NODE_ENV === "production";
 
-  if (runtimeProduction && environment !== "production") {
-    return {
-      enabled: true,
-      ok: false,
-      error:
-        "Production hanya boleh memakai MIDTRANS_ENV=production atau MIDTRANS_IS_PRODUCTION=true. Sandbox tidak diizinkan di production.",
-    };
-  }
-
-  if (!runtimeProduction && environment === "production") {
-    return {
-      enabled: true,
-      ok: false,
-      error:
-        "Development hanya boleh memakai MIDTRANS_ENV=sandbox atau MIDTRANS_IS_PRODUCTION=false. Jangan memakai kredensial production di development.",
-    };
+  if (runtimeProduction) {
+    if (environment === "sandbox") {
+      if (!allowSandbox) {
+        return {
+          enabled: true,
+          ok: false,
+          error:
+            "Production hanya boleh memakai MIDTRANS_ENV=production atau MIDTRANS_IS_PRODUCTION=true. Untuk mengizinkan Sandbox pada deployment Vercel Production, set MIDTRANS_ALLOW_SANDBOX=true.",
+        };
+      }
+    } else if (environment === "production") {
+      if (allowSandbox) {
+        return {
+          enabled: true,
+          ok: false,
+          error:
+            "MIDTRANS_ALLOW_SANDBOX=true hanya diizinkan untuk lingkungan Sandbox. Jangan gunakan kredensial Production saat flag ini aktif.",
+        };
+      }
+    }
+  } else {
+    // Development runtime (NODE_ENV !== "production")
+    if (environment === "production") {
+      return {
+        enabled: true,
+        ok: false,
+        error:
+          "Development hanya boleh memakai MIDTRANS_ENV=sandbox atau MIDTRANS_IS_PRODUCTION=false. Jangan memakai kredensial production di development.",
+      };
+    }
   }
 
   const serverKey = typeof rawServerKey === "string" ? rawServerKey.trim() : "";
@@ -170,6 +249,20 @@ export function getMidtransConfigState(): MidtransConfigState {
       ok: false,
       error:
         "MIDTRANS_SERVER_KEY dan MIDTRANS_CLIENT_KEY (atau NEXT_PUBLIC_MIDTRANS_CLIENT_KEY) wajib diisi saat Midtrans aktif.",
+    };
+  }
+
+  const credentialCheck = validateCredentialsForEnvironment(
+    environment,
+    serverKey,
+    clientKey,
+  );
+
+  if (!credentialCheck.ok) {
+    return {
+      enabled: true,
+      ok: false,
+      error: credentialCheck.error,
     };
   }
 

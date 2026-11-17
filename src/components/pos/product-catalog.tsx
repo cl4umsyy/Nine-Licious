@@ -52,9 +52,9 @@ export function ProductCatalog({
   }, [products, selectedCategoryId, searchQuery]);
 
   return (
-    <div className="flex flex-col h-full space-y-4">
+    <div className="flex flex-col h-full min-h-0 space-y-3">
       {/* Search Bar & Category Filter Bar */}
-      <div className="space-y-3 shrink-0">
+      <div className="space-y-2.5 shrink-0">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
           <Input
@@ -119,7 +119,7 @@ export function ProductCatalog({
       </div>
 
       {/* Product Grid */}
-      <div className="flex-1 overflow-y-auto pr-1">
+      <div className="flex-1 min-h-0 overflow-y-auto pr-1">
         {filteredProducts.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-12 text-center rounded-2xl border border-dashed bg-card/40 text-muted-foreground space-y-2 mt-4">
             <Utensils className="size-8 text-muted-foreground/60" />

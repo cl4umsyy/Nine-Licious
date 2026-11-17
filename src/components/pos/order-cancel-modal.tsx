@@ -131,14 +131,14 @@ export function OrderCancelModal({
           )}
         </div>
 
-        <DialogFooter className="flex-row items-center justify-end gap-2 pt-2">
+        <DialogFooter className="flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-3 pt-3">
           <Button
             type="button"
             variant="outline"
-            size="sm"
+            size="default"
             onClick={onClose}
             disabled={isPending}
-            className="text-xs"
+            className="h-10 px-4 text-xs font-semibold rounded-xl"
           >
             Kembali
           </Button>
@@ -146,10 +146,10 @@ export function OrderCancelModal({
           <Button
             type="button"
             variant="destructive"
-            size="sm"
+            size="default"
             disabled={!isValid || isPending}
             onClick={handleCancelOrder}
-            className="text-xs font-semibold"
+            className="h-10 px-5 text-xs font-bold rounded-xl shadow-xs"
           >
             {isPending ? (
               <>

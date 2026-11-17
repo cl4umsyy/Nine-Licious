@@ -13,6 +13,8 @@ import {
   LoaderCircle,
   Pencil,
   RotateCcw,
+  Store,
+  Trees,
   UploadCloud,
   Users,
 } from "lucide-react";
@@ -58,6 +60,11 @@ export type FloorPlanCanvasProps = {
   onSavePositions?: (zoneId: string, positions: TablePosition[]) => Promise<{ ok: boolean; message?: string }>;
   onPublishLayout?: (zoneId: string) => Promise<{ ok: boolean; message?: string }>;
   onEditTable?: (table: DiningTable) => void;
+  selectable?: boolean;
+  selectedTableId?: string | null;
+  onSelectTable?: (table: DiningTable) => void;
+  hideHeader?: boolean;
+  hideZoneTabs?: boolean;
 };
 
 const STATUS_VARIANTS: Record<
@@ -107,6 +114,11 @@ export function FloorPlanCanvas({
   onSavePositions,
   onPublishLayout,
   onEditTable,
+  selectable = false,
+  selectedTableId,
+  onSelectTable,
+  hideHeader = false,
+  hideZoneTabs = false,
 }: FloorPlanCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [internalZoneId, setInternalZoneId] = useState<string>(
@@ -218,6 +230,12 @@ export function FloorPlanCanvas({
     e: React.PointerEvent<HTMLDivElement>,
     table: DiningTable,
   ) => {
+    if (selectable) {
+      onSelectTable?.(table);
+      setSelectedTable(table);
+      return;
+    }
+
     if (!interactive) {
       setInspectTable(table);
       loadSessionSummary(table.id);
@@ -336,85 +354,87 @@ export function FloorPlanCanvas({
   return (
     <div className="space-y-4">
       {/* Zone selection bar & actions header */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mr-1">
-            Area:
-          </span>
-          {zones.map((zone) => {
-            const isSelected = zone.id === currentZone?.id;
-            return (
-              <Button
-                key={zone.id}
-                type="button"
-                variant={isSelected ? "default" : "outline"}
-                size="sm"
-                onClick={() => handleZoneSelect(zone.id)}
-                className={`h-8 text-xs font-medium ${
-                  isSelected ? "bg-primary text-primary-foreground shadow-sm" : ""
-                }`}
-              >
-                <Layers className="size-3.5 mr-1" />
-                {zone.name}
-                {!zone.is_active && (
-                  <span className="ml-1 text-[10px] opacity-75">(nonaktif)</span>
-                )}
-              </Button>
-            );
-          })}
-        </div>
-
-        {interactive && (
-          <div className="flex flex-wrap items-center gap-2">
-            {hasUnsavedChanges && (
-              <>
+      {!hideZoneTabs && (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mr-1">
+              Area:
+            </span>
+            {zones.map((zone) => {
+              const isSelected = zone.id === currentZone?.id;
+              return (
                 <Button
+                  key={zone.id}
                   type="button"
-                  variant="outline"
+                  variant={isSelected ? "default" : "outline"}
                   size="sm"
-                  onClick={handleResetPositions}
-                  disabled={isSaving}
-                  className="h-8 text-xs"
+                  onClick={() => handleZoneSelect(zone.id)}
+                  className={`h-8 text-xs font-medium ${
+                    isSelected ? "bg-primary text-primary-foreground shadow-sm" : ""
+                  }`}
                 >
-                  <RotateCcw className="size-3.5 mr-1.5" />
-                  Reset
-                </Button>
-                <Button
-                  type="button"
-                  variant="default"
-                  size="sm"
-                  onClick={handleSavePositions}
-                  disabled={isSaving}
-                  className="h-8 text-xs bg-brand-accent hover:bg-brand-accent/90 text-white"
-                >
-                  {isSaving ? (
-                    <LoaderCircle className="size-3.5 mr-1.5 animate-spin" />
-                  ) : (
-                    <Check className="size-3.5 mr-1.5" />
+                  <Layers className="size-3.5 mr-1" />
+                  {zone.name}
+                  {!zone.is_active && (
+                    <span className="ml-1 text-[10px] opacity-75">(nonaktif)</span>
                   )}
-                  Simpan Posisi
                 </Button>
-              </>
-            )}
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={handlePublish}
-              disabled={isPublishing || hasUnsavedChanges || zoneTables.length === 0}
-              className="h-8 text-xs border-primary/30 text-primary hover:bg-primary/5"
-            >
-              {isPublishing ? (
-                <LoaderCircle className="size-3.5 mr-1.5 animate-spin" />
-              ) : (
-                <UploadCloud className="size-3.5 mr-1.5" />
-              )}
-              Terbitkan Layout
-            </Button>
+              );
+            })}
           </div>
-        )}
-      </div>
+
+          {interactive && (
+            <div className="flex flex-wrap items-center gap-2">
+              {hasUnsavedChanges && (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleResetPositions}
+                    disabled={isSaving}
+                    className="h-8 text-xs"
+                  >
+                    <RotateCcw className="size-3.5 mr-1.5" />
+                    Reset
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="default"
+                    size="sm"
+                    onClick={handleSavePositions}
+                    disabled={isSaving}
+                    className="h-8 text-xs bg-brand-accent hover:bg-brand-accent/90 text-white"
+                  >
+                    {isSaving ? (
+                      <LoaderCircle className="size-3.5 mr-1.5 animate-spin" />
+                    ) : (
+                      <Check className="size-3.5 mr-1.5" />
+                    )}
+                    Simpan Posisi
+                  </Button>
+                </>
+              )}
+
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handlePublish}
+                disabled={isPublishing || hasUnsavedChanges || zoneTables.length === 0}
+                className="h-8 text-xs border-primary/30 text-primary hover:bg-primary/5"
+              >
+                {isPublishing ? (
+                  <LoaderCircle className="size-3.5 mr-1.5 animate-spin" />
+                ) : (
+                  <UploadCloud className="size-3.5 mr-1.5" />
+                )}
+                Terbitkan Layout
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Unsaved changes notice banner */}
       {interactive && hasUnsavedChanges && (
@@ -434,38 +454,40 @@ export function FloorPlanCanvas({
 
       {/* Canvas container */}
       <Card className="overflow-hidden border-border/80 shadow-sm">
-        <CardHeader className="border-b bg-muted/20 px-4 py-2.5">
-          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-            <div className="flex items-center gap-2 font-medium">
-              <span>Denah: {currentZone?.name ?? "Utama"}</span>
-              <span className="text-muted-foreground">·</span>
-              <span className="text-muted-foreground">{zoneTables.length} meja</span>
-            </div>
+        {!hideHeader && (
+          <CardHeader className="border-b bg-muted/20 px-4 py-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-2 font-medium">
+                <span>Denah: {currentZone?.name ?? "Utama"}</span>
+                <span className="text-muted-foreground">·</span>
+                <span className="text-muted-foreground">{zoneTables.length} meja</span>
+              </div>
 
-            <div className="flex items-center gap-3">
-              {publishedAt ? (
-                <span className="flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-400">
-                  <CheckCircle2 className="size-3.5" />
-                  Terbit: {new Date(publishedAt).toLocaleString("id-ID")}
-                </span>
-              ) : (
-                <span className="text-xs text-muted-foreground">
-                  Status: Draf / Belum Diterbitkan
-                </span>
-              )}
+              <div className="flex items-center gap-3">
+                {publishedAt ? (
+                  <span className="flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-400">
+                    <CheckCircle2 className="size-3.5" />
+                    Terbit: {new Date(publishedAt).toLocaleString("id-ID")}
+                  </span>
+                ) : (
+                  <span className="text-xs text-muted-foreground">
+                    Status: Draf / Belum Diterbitkan
+                  </span>
+                )}
 
-              {interactive ? (
-                <Badge variant="secondary" className="text-[11px] font-normal">
-                  Mode Editor (Drag-and-Drop)
-                </Badge>
-              ) : (
-                <Badge variant="outline" className="text-[11px] font-normal">
-                  Mode Tampilan
-                </Badge>
-              )}
+                {interactive ? (
+                  <Badge variant="secondary" className="text-[11px] font-normal">
+                    Mode Editor (Drag-and-Drop)
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-[11px] font-normal">
+                    Mode Tampilan
+                  </Badge>
+                )}
+              </div>
             </div>
-          </div>
-        </CardHeader>
+          </CardHeader>
+        )}
 
         <CardContent className="p-3 sm:p-4">
           <div
@@ -479,6 +501,91 @@ export function FloorPlanCanvas({
               backgroundSize: "20px 20px",
             }}
           >
+            {/* Architectural Landmarks */}
+            {currentZone?.name?.toLowerCase().includes("utama") && (
+              <>
+                {/* Area Kasir / Counter POS */}
+                <div
+                  style={{
+                    left: "5%",
+                    top: "76%",
+                    width: "24%",
+                    height: "15%",
+                  }}
+                  className="absolute pointer-events-none rounded-xl border border-dashed border-primary/30 bg-brand-soft/25 p-2 flex flex-col justify-center items-center text-center text-primary/80 z-0"
+                >
+                  <div className="flex items-center gap-1.5 font-bold text-[11px] sm:text-xs">
+                    <Store className="size-3.5 sm:size-4 text-primary" />
+                    <span>Kasir & Counter POS</span>
+                  </div>
+                  <span className="text-[9px] text-muted-foreground hidden sm:inline">
+                    Pusat Pemesanan & Pembayaran
+                  </span>
+                </div>
+
+                {/* Pintu Masuk Utama */}
+                <div
+                  style={{
+                    left: "40%",
+                    top: "84%",
+                    width: "22%",
+                    height: "11%",
+                  }}
+                  className="absolute pointer-events-none rounded-lg border border-dashed border-muted-foreground/30 bg-muted/40 p-1.5 flex items-center justify-center gap-1.5 text-muted-foreground text-[10px] sm:text-[11px] font-medium z-0"
+                >
+                  <DoorOpen className="size-3.5 text-primary/80" />
+                  <span>Pintu Masuk Utama</span>
+                </div>
+
+                {/* Akses ke Teras */}
+                <div
+                  style={{
+                    left: "82%",
+                    top: "28%",
+                    width: "15%",
+                    height: "16%",
+                  }}
+                  className="absolute pointer-events-none rounded-lg border border-dashed border-emerald-500/30 bg-emerald-50/30 dark:bg-emerald-950/20 p-1.5 flex flex-col items-center justify-center text-center text-emerald-800 dark:text-emerald-300 text-[10px] font-medium z-0"
+                >
+                  <span className="font-bold text-[11px]">Akses Teras</span>
+                  <span className="text-[9px] text-muted-foreground">Pintu Kaca &rarr;</span>
+                </div>
+              </>
+            )}
+
+            {currentZone?.name?.toLowerCase().includes("teras") && (
+              <>
+                {/* Pintu Masuk dari Ruang Utama */}
+                <div
+                  style={{
+                    left: "4%",
+                    top: "30%",
+                    width: "15%",
+                    height: "18%",
+                  }}
+                  className="absolute pointer-events-none rounded-lg border border-dashed border-primary/30 bg-brand-soft/25 p-1.5 flex flex-col items-center justify-center text-center text-primary text-[10px] font-medium z-0"
+                >
+                  <span className="text-[9px] text-muted-foreground">&larr; Pintu Masuk</span>
+                  <span className="font-bold text-[11px]">Ruang Utama</span>
+                </div>
+
+                {/* Area Taman Terbuka */}
+                <div
+                  style={{
+                    left: "80%",
+                    top: "14%",
+                    width: "16%",
+                    height: "60%",
+                  }}
+                  className="absolute pointer-events-none rounded-xl border border-dashed border-emerald-500/30 bg-emerald-500/5 p-2 flex flex-col items-center justify-center text-center text-emerald-700 dark:text-emerald-400 text-[10px] font-medium z-0"
+                >
+                  <Trees className="size-5 mb-1 text-emerald-600/70" />
+                  <span className="font-bold text-[11px]">Taman Terbuka</span>
+                  <span className="text-[9px] text-muted-foreground text-center">Area Hijau Al Fresco</span>
+                </div>
+              </>
+            )}
+
             {zoneTables.length === 0 ? (
               <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center text-muted-foreground">
                 <Layers className="size-10 stroke-[1.5] text-muted-foreground/60 mb-2" />
@@ -495,7 +602,7 @@ export function FloorPlanCanvas({
                 };
                 const size = tableDimensions(table.capacity, table.shape);
                 const isDragging = draggingId === table.id;
-                const isSelected = selectedTable?.id === table.id;
+                const isSelected = selectedTable?.id === table.id || selectedTableId === table.id;
                 const variant = STATUS_VARIANTS[table.status];
 
                 const leftPercent = (pos.x / FLOOR_PLAN_WIDTH) * 100;
@@ -508,6 +615,11 @@ export function FloorPlanCanvas({
                     key={table.id}
                     onPointerDown={(e) => handlePointerDown(e, table)}
                     onClick={() => {
+                      if (selectable) {
+                        onSelectTable?.(table);
+                        setSelectedTable(table);
+                        return;
+                      }
                       if (!interactive) setInspectTable(table);
                     }}
                     role="button"
@@ -520,7 +632,9 @@ export function FloorPlanCanvas({
                       height: `${heightPercent}%`,
                       touchAction: "none",
                     }}
-                    className={`absolute flex flex-col items-center justify-center border-2 transition-shadow cursor-grab active:cursor-grabbing ${
+                    className={`absolute flex flex-col items-center justify-center border-2 transition-all ${
+                      selectable ? "cursor-pointer" : "cursor-grab active:cursor-grabbing"
+                    } ${
                       table.shape === "round"
                         ? "rounded-full"
                         : "rounded-xl"
@@ -528,10 +642,17 @@ export function FloorPlanCanvas({
                       isDragging
                         ? "shadow-xl ring-2 ring-primary ring-offset-2 z-30 scale-105"
                         : isSelected
-                        ? "shadow-md ring-2 ring-primary/60 z-20"
-                        : "shadow-sm hover:shadow-md z-10"
+                        ? "shadow-lg ring-3 ring-primary ring-offset-1 z-20 scale-[1.03]"
+                        : "shadow-xs hover:shadow-md z-10 hover:scale-[1.01]"
                     } ${!table.is_active ? "opacity-50 border-dashed" : ""}`}
                   >
+                    {/* Selected Badge */}
+                    {isSelected && (
+                      <div className="absolute top-1 right-1 flex size-4 items-center justify-center rounded-full bg-primary text-primary-foreground shadow ring-1 ring-white">
+                        <Check className="size-2.5 stroke-[3]" />
+                      </div>
+                    )}
+
                     {/* Live Dragging Coordinates Tooltip */}
                     {isDragging && (
                       <div className="absolute -top-7 left-1/2 -translate-x-1/2 rounded bg-black/80 px-2 py-0.5 text-[10px] font-mono font-medium text-white shadow pointer-events-none whitespace-nowrap z-40">

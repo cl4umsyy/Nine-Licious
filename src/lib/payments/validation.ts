@@ -167,4 +167,37 @@ export const processRefundSchema = z.object({
     .max(128, "Kunci idempotensi refund maksimal 128 karakter."),
 });
 
+export const createSnapPaymentSchema = z.object({
+  orderId: z
+    .string({ message: "ID pesanan wajib diisi." })
+    .trim()
+    .regex(uuidRegex, "ID pesanan tidak valid."),
+  grossAmount: z.coerce
+    .number({ message: "Nominal pembayaran harus berupa angka." })
+    .int("Nominal pembayaran harus bilangan bulat rupiah.")
+    .positive("Nominal pembayaran harus lebih besar dari Rp 0."),
+  idempotencyKey: z
+    .string({ message: "Kunci idempotensi pembayaran wajib diisi." })
+    .trim()
+    .min(8, "Kunci idempotensi pembayaran minimal 8 karakter.")
+    .max(128, "Kunci idempotensi pembayaran maksimal 128 karakter."),
+  isSplitBill: z.boolean().optional().default(false),
+  splitBillType: z.enum(["custom_amount", "by_item"]).optional().nullable(),
+  itemAllocations: z
+    .array(
+      z.object({
+        order_item_id: z.string().regex(uuidRegex, "ID item pesanan tidak valid."),
+        allocated_quantity: z.number().int().positive(),
+        allocated_line_subtotal: z.number().int(),
+        allocated_discount_share: z.number().int(),
+        allocated_service_share: z.number().int(),
+        allocated_tax_share: z.number().int(),
+        allocated_final_amount: z.number().int().positive(),
+      }),
+    )
+    .optional()
+    .nullable(),
+});
+
+
 

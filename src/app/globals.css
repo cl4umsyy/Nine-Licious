@@ -167,3 +167,10 @@
     background: transparent;
   }
 }
+
+/* Midtrans Snap Iframe Pointer & Stacking Fix */
+iframe#snap-midtrans,
+#snap-container {
+  pointer-events: auto !important;
+  z-index: 999999 !important;
+}
