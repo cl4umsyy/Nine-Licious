@@ -2,6 +2,7 @@ import "server-only";
 
 import { getMidtransConfigState } from "./config";
 import { getMidtransStatus, type MidtransStatusResponse } from "./recovery";
+import { isMidtransTransactionExpired } from "./reservation";
 import { parseMidtransGrossAmount } from "./signature";
 import { isMidtransPaidStatus } from "./status";
 import {
@@ -13,6 +14,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 export type ReconcileOrderResult = {
   ok: boolean;
   isSettled: boolean;
+  reservationReleased?: boolean;
   midtransStatus?: string;
   statusCode?: string;
   orderNumber?: string;
@@ -100,11 +102,11 @@ export async function reconcileActiveMidtransPayment({
     };
   }
 
-  // 2. Ambil transaksi Midtrans terakhir untuk pesanan ini
+  // 2. Ambil transaksi Midtrans aktif/terakhir untuk pesanan ini
   const { data: latestMidtransTx, error: txErr } = await adminClient
     .from("midtrans_transactions")
     .select(
-      "id, midtrans_order_id, gross_amount, lifecycle_status, snap_token, snap_redirect_url",
+      "id, midtrans_order_id, gross_amount, lifecycle_status, snap_token, snap_redirect_url, payment_expires_at",
     )
     .eq("order_id", orderId)
     .order("created_at", { ascending: false })
@@ -121,6 +123,21 @@ export async function reconcileActiveMidtransPayment({
     };
   }
 
+  // Jika transaksi terakhir sudah terminal (expired/cancelled/denied), tidak perlu panggil Midtrans lagi
+  if (
+    latestMidtransTx.lifecycle_status === "expired" ||
+    latestMidtransTx.lifecycle_status === "cancelled" ||
+    latestMidtransTx.lifecycle_status === "denied"
+  ) {
+    return {
+      ok: true,
+      isSettled: false,
+      orderNumber: order.order_number,
+      midtransStatus: latestMidtransTx.lifecycle_status,
+      message: `Transaksi Midtrans sebelumnya berstatus ${latestMidtransTx.lifecycle_status}. Silakan pilih Tunai atau buat transaksi Midtrans baru.`,
+    };
+  }
+
   const midtransOrderId = latestMidtransTx.midtrans_order_id;
 
   // 3. Periksa status langsung ke Midtrans Core API (HTTPS + Basic Auth ServerKey)
@@ -129,13 +146,60 @@ export async function reconcileActiveMidtransPayment({
   if (!statusCheck.ok) {
     // Tangani HTTP 404 dari Midtrans (transaksi belum dibuat/dipilih metode bayar di Snap)
     if (statusCheck.httpStatus === 404) {
+      const expired = isMidtransTransactionExpired(
+        latestMidtransTx.payment_expires_at,
+      );
+
+      // Jika Snap token sudah kedaluwarsa DAN Midtrans mengonfirmasi 404 (tidak pernah dibayar),
+      // lepaskan reservasi secara aman agar tidak memblokir pembayaran Tunai maupun Midtrans baru.
+      if (
+        expired &&
+        ["initiated", "token_created", "pending"].includes(
+          latestMidtransTx.lifecycle_status,
+        )
+      ) {
+        const nowIso = new Date().toISOString();
+        const { data: expiredTx } = await adminClient
+          .from("midtrans_transactions")
+          .update({
+            lifecycle_status: "expired",
+            midtrans_transaction_status: "expire",
+            updated_at: nowIso,
+          })
+          .eq("id", latestMidtransTx.id)
+          .in("lifecycle_status", ["initiated", "token_created", "pending"])
+          .select("id")
+          .maybeSingle();
+
+        if (expiredTx) {
+          await adminClient
+            .from("order_allocations")
+            .update({
+              allocation_status: "released",
+              updated_at: nowIso,
+            })
+            .eq("midtrans_transaction_id", expiredTx.id)
+            .eq("allocation_status", "reserved");
+        }
+
+        return {
+          ok: true,
+          isSettled: false,
+          reservationReleased: true,
+          orderNumber: order.order_number,
+          midtransStatus: "expire",
+          message:
+            "Transaksi Midtrans sebelumnya telah kedaluwarsa tanpa pembayaran. Reservasi dilepas; silakan bayar dengan Tunai atau buka Midtrans Snap baru.",
+        };
+      }
+
       return {
         ok: true,
         isSettled: false,
         orderNumber: order.order_number,
         midtransStatus: "uncreated_or_pending",
         message:
-          "Transaksi belum diproses di Midtrans. Menunggu pelanggan memilih metode pembayaran.",
+          "Transaksi belum dipilih metode pembayarannya di Snap. Menunggu pelanggan menyelesaikan atau batalkan untuk pindah ke Tunai.",
       };
     }
 
@@ -302,10 +366,11 @@ export async function reconcileActiveMidtransPayment({
     return {
       ok: true,
       isSettled: false,
+      reservationReleased: true,
       orderNumber: order.order_number,
       midtransStatus: rawStatus,
       statusCode,
-      message: `Transaksi Midtrans telah berakhir dengan status: ${rawStatus}.`,
+      message: `Transaksi Midtrans telah berakhir (${rawStatus}) dan reservasi dilepas.`,
     };
   }
 

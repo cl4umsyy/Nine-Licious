@@ -59,12 +59,31 @@ export async function getMidtransStatus(orderId: string): Promise<CheckStatusRes
     });
 
     const body: MidtransStatusResponse = await response.json();
+    const bodyStatusCode = body?.status_code ? String(body.status_code).trim() : "";
 
-    if (!response.ok) {
+    // Midtrans Core API v2 dapat mengembalikan HTTP 200 dengan body { status_code: "404" }
+    // ketika pelanggan membuka Snap tetapi belum pernah memilih metode bayar.
+    if (bodyStatusCode === "404" || response.status === 404) {
       return {
         ok: false,
-        httpStatus: response.status,
-        error: body?.status_message || `HTTP ${response.status}`,
+        httpStatus: 404,
+        error: body?.status_message || "Transaction doesn't exist.",
+      };
+    }
+
+    if (
+      !response.ok ||
+      (bodyStatusCode && !["200", "201", "202"].includes(bodyStatusCode))
+    ) {
+      const parsedCode = Number.parseInt(bodyStatusCode, 10);
+      const effectiveStatus =
+        Number.isFinite(parsedCode) && parsedCode >= 400
+          ? parsedCode
+          : response.status;
+      return {
+        ok: false,
+        httpStatus: effectiveStatus,
+        error: body?.status_message || `HTTP ${effectiveStatus}`,
       };
     }
 
@@ -125,29 +144,34 @@ export async function cancelMidtransTransaction(orderId: string): Promise<Cancel
     const isCancelled = body.status_code === "200" && body.transaction_status === "cancel";
 
     if (isCancelled) {
-      // Perbarui status lokal di DB
+      // Perbarui status lokal di DB secara atomik dan lepas alokasi reserved
       const adminClient = createSupabaseAdminClient();
       if (adminClient) {
-        await adminClient
+        const nowIso = new Date().toISOString();
+        const sanitizedBody = Object.fromEntries(
+          Object.entries(body).filter(([k]) => k !== "signature_key"),
+        );
+
+        const { data: tx } = await adminClient
           .from("midtrans_transactions")
           .update({
             lifecycle_status: "cancelled",
             midtrans_transaction_status: "cancel",
-            sanitized_response: body,
+            sanitized_response: sanitizedBody,
+            updated_at: nowIso,
           })
-          .eq("midtrans_order_id", orderId);
-
-        // Lepas alokasi item jika ada
-        const { data: tx } = await adminClient
-          .from("midtrans_transactions")
-          .select("id")
           .eq("midtrans_order_id", orderId)
-          .single();
+          .in("lifecycle_status", ["initiated", "token_created", "pending"])
+          .select("id")
+          .maybeSingle();
 
         if (tx) {
           await adminClient
             .from("order_allocations")
-            .update({ allocation_status: "released" })
+            .update({
+              allocation_status: "released",
+              updated_at: nowIso,
+            })
             .eq("midtrans_transaction_id", tx.id)
             .eq("allocation_status", "reserved");
         }

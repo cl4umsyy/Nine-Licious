@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import {
   AlertCircle,
   Banknote,
@@ -10,8 +10,10 @@ import {
   ExternalLink,
   Loader2,
   QrCode,
+  Receipt,
   RefreshCw,
   Split,
+  XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -30,11 +32,15 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { cn } from "@/lib/utils";
 import { formatRupiah } from "@/lib/menu/format";
 import { calculateCumulativeItemAllocations } from "@/lib/midtrans/allocation";
+import type { ActiveMidtransReservationInfo } from "@/lib/midtrans/reservation";
 import type { OrderWithDetails } from "@/lib/orders/types";
 import {
+  cancelActiveMidtransReservationAction,
   createPosMidtransSnapAction,
   getOrderPaymentStatusAction,
+  getOrderPaymentSummaryAction,
   processPosManualPaymentAction,
+  type OrderPaymentSummaryData,
 } from "@/lib/payments/actions";
 
 declare global {
@@ -148,6 +154,7 @@ export function PaymentModal({
             paymentNotes={paymentNotes}
             setPaymentNotes={setPaymentNotes}
             idempotencyKey={idempotencyKey}
+            onRefreshIdempotencyKey={() => setIdempotencyKey(crypto.randomUUID())}
             midtransWaiting={midtransWaiting}
             setMidtransWaiting={setMidtransWaiting}
             activeSnapToken={activeSnapToken}
@@ -177,6 +184,7 @@ function PaymentModalContent({
   paymentNotes,
   setPaymentNotes,
   idempotencyKey,
+  onRefreshIdempotencyKey,
   midtransWaiting,
   setMidtransWaiting,
   activeSnapToken,
@@ -199,19 +207,71 @@ function PaymentModalContent({
   paymentNotes: string;
   setPaymentNotes: (s: string) => void;
   idempotencyKey: string;
+  onRefreshIdempotencyKey: () => void;
   midtransWaiting: boolean;
   setMidtransWaiting: (waiting: boolean) => void;
   activeSnapToken: string | null;
   setActiveSnapToken: (token: string | null) => void;
 }) {
-  // State proses transaksi & Midtrans
+  // State proses transaksi, reservasi gateway & Midtrans
   const [isSubmitting, startTransition] = useTransition();
   const [isVerifyingMidtrans, setIsVerifyingMidtrans] = useState(false);
+  const [isCancellingMidtrans, setIsCancellingMidtrans] = useState(false);
+  const [paymentSummary, setPaymentSummary] =
+    useState<OrderPaymentSummaryData | null>(null);
   const [snapLoadError, setSnapLoadError] = useState<string | null>(() =>
     !process.env.NEXT_PUBLIC_MIDTRANS_CLIENT_KEY
       ? "NEXT_PUBLIC_MIDTRANS_CLIENT_KEY belum dikonfigurasi di browser."
       : null,
   );
+
+  // Muat ringkasan saldo & reservasi gateway secara READ-ONLY saat modal dibuka.
+  // Tidak membuat transaksi Midtrans baru dan tidak otomatis menutup modal / membuka struk.
+  const refreshPaymentSummary = useCallback(async () => {
+    try {
+      const res = await getOrderPaymentSummaryAction(order.id);
+      if (res.ok && res.data) {
+        setPaymentSummary(res.data);
+        if (res.data.activeMidtransTx?.canReopenSnap && res.data.activeMidtransTx.snapToken) {
+          setActiveSnapToken(res.data.activeMidtransTx.snapToken);
+        } else {
+          setActiveSnapToken(null);
+        }
+      }
+    } catch {
+      // Biarkan nilai fallback dari prop order tetap tampil
+    }
+  }, [order.id, setActiveSnapToken]);
+
+  useEffect(() => {
+    let active = true;
+    getOrderPaymentSummaryAction(order.id)
+      .then((res) => {
+        if (!active) return;
+        if (res.ok && res.data) {
+          setPaymentSummary(res.data);
+          if (res.data.activeMidtransTx?.canReopenSnap && res.data.activeMidtransTx.snapToken) {
+            setActiveSnapToken(res.data.activeMidtransTx.snapToken);
+          } else {
+            setActiveSnapToken(null);
+          }
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      active = false;
+    };
+  }, [order.id, setActiveSnapToken]);
+
+  const effectiveRemainingBalance =
+    paymentSummary?.remainingBalance ?? remainingBalance;
+  const reservedAmount = paymentSummary?.reservedAmount ?? 0;
+  const availableForCashAmount =
+    paymentSummary?.availableForCashAmount ?? effectiveRemainingBalance;
+  const activeMidtransTx: ActiveMidtransReservationInfo | null =
+    paymentSummary?.activeMidtransTx ?? null;
+  const isAlreadySettledInDb = Boolean(paymentSummary?.isSettled);
 
   // Muat script Midtrans Snap secara dinamis untuk environment sandbox
   useEffect(() => {
@@ -276,15 +336,15 @@ function PaymentModalContent({
   // Hitung nominal efektif yang harus dibayar berdasarkan mode split
   const payAmount = useMemo(() => {
     if (splitMode === "full") {
-      return remainingBalance;
+      return effectiveRemainingBalance;
     }
     if (splitMode === "custom_amount") {
-      return Math.min(Math.max(1, customAmount || 0), remainingBalance);
+      return Math.min(Math.max(1, customAmount || 0), effectiveRemainingBalance);
     }
     if (splitMode === "by_item") {
       if (selectedItemIds.size === 0) return 0;
       if (itemAllocationCalculation) {
-        return Math.min(itemAllocationCalculation.grossTotal, remainingBalance);
+        return Math.min(itemAllocationCalculation.grossTotal, effectiveRemainingBalance);
       }
       const selectedSubtotal = order.items
         .filter((it) => selectedItemIds.has(it.id))
@@ -296,10 +356,13 @@ function PaymentModalContent({
       const serviceRate = order.service_charge_percent / 100;
       const effectiveTotal = Math.round(selectedSubtotal * (1 + taxRate + serviceRate));
 
-      return Math.min(Math.max(1, effectiveTotal), remainingBalance);
+      return Math.min(Math.max(1, effectiveTotal), effectiveRemainingBalance);
     }
-    return remainingBalance;
-  }, [splitMode, remainingBalance, customAmount, selectedItemIds, itemAllocationCalculation, order.items, order.subtotal, order.tax_percent, order.service_charge_percent]);
+    return effectiveRemainingBalance;
+  }, [splitMode, effectiveRemainingBalance, customAmount, selectedItemIds, itemAllocationCalculation, order.items, order.subtotal, order.tax_percent, order.service_charge_percent]);
+
+  const isCashBlockedByReservation =
+    method === "cash" && reservedAmount > 0 && payAmount > availableForCashAmount;
 
   // Kalkulasi kembalian tunai
   const parsedCashReceived = parseInt(cashReceived, 10) || 0;
@@ -342,6 +405,13 @@ function PaymentModalContent({
       return;
     }
 
+    if (method === "cash" && isCashBlockedByReservation) {
+      toast.error(
+        `Sebesar ${formatRupiah(reservedAmount)} sedang direservasi transaksi Midtrans. Periksa status atau batalkan reservasi Midtrans terlebih dahulu.`,
+      );
+      return;
+    }
+
     if (method === "cash" && isCashDeficit) {
       toast.error(
         `Uang tunai diterima kurang dari nominal tagihan (Kurang ${formatRupiah(payAmount - parsedCashReceived)}).`,
@@ -369,6 +439,7 @@ function PaymentModalContent({
         onPaymentSuccess(order.id, result.data.is_settled);
       } else {
         toast.error(result.message || "Gagal memproses pembayaran.");
+        void refreshPaymentSummary();
       }
     });
   };
@@ -428,13 +499,15 @@ function PaymentModalContent({
       if (!result.ok || !result.data?.snapToken) {
         toast.error(result.message || "Gagal membuat transaksi Midtrans Snap.");
         setMidtransWaiting(false);
+        void refreshPaymentSummary();
         return;
       }
 
       const { snapToken } = result.data;
       setActiveSnapToken(snapToken);
+      void refreshPaymentSummary();
 
-      // 2. Buka popup Midtrans Snap di browser
+      // 2. Buka popup Midtrans Snap di browser (JANGAN langsung buka struk sebelum terverifikasi server!)
       triggerSnapPopup(snapToken);
     });
   };
@@ -489,29 +562,54 @@ function PaymentModalContent({
     }
   };
 
-  // Verifikasi status pembayaran tepercaya dari server dengan rekonsiliasi aktif
+  // Verifikasi status pembayaran tepercaya dari server dengan rekonsiliasi aktif (GET Status API)
   const checkServerPaymentStatus = async () => {
-    if (isVerifyingMidtrans) return;
+    if (isVerifyingMidtrans || isCancellingMidtrans) return;
     setIsVerifyingMidtrans(true);
     try {
       const res = await getOrderPaymentStatusAction(order.id);
       setIsVerifyingMidtrans(false);
       if (res.ok && res.data) {
-        if (res.data.activeSnapToken && !activeSnapToken) {
-          setActiveSnapToken(res.data.activeSnapToken);
-        }
+        setPaymentSummary({
+          orderId: res.data.orderId,
+          orderNumber: res.data.orderNumber,
+          status: res.data.status,
+          paymentStatus: res.data.paymentStatus,
+          grandTotal: res.data.grandTotal,
+          paidTotal: res.data.paidTotal,
+          remainingBalance: res.data.remainingBalance,
+          reservedAmount: res.data.reservedAmount,
+          availableForCashAmount: res.data.availableForCashAmount,
+          isSettled: res.data.isSettled,
+          queueNumber: res.data.queueNumber ?? null,
+          activeMidtransTx: res.data.activeMidtransTx ?? null,
+        });
+
+        setActiveSnapToken(res.data.activeSnapToken ?? null);
+
         if (res.data.isSettled) {
-          toast.success(`Pesanan #${res.data.orderNumber} LUNAS terverifikasi!`);
+          toast.success(
+            `Pesanan #${res.data.orderNumber} LUNAS terverifikasi di Midtrans!`,
+          );
           setMidtransWaiting(false);
           onPaymentSuccess(order.id, true);
-        } else if (res.data.paidTotal > 0) {
+        } else if (res.data.reservationReleased) {
+          onRefreshIdempotencyKey();
+          toast.info(
+            res.data.reconciliationMessage ||
+              "Reservasi Midtrans telah dilepas. Silakan bayar dengan Tunai atau buka Midtrans Snap baru.",
+          );
+        } else if (res.data.paidTotal > (order.paid_total || 0)) {
           toast.success(
             `Pembayaran parsial terverifikasi. Sisa tagihan: ${formatRupiah(res.data.remainingBalance)}`,
           );
           setMidtransWaiting(false);
           onPaymentSuccess(order.id, false);
         } else {
-          toast.info(res.data.reconciliationMessage || "Pembayaran masih menunggu penyelesaian pelanggan.");
+          toast.info(
+            res.data.reconciliationMessage ||
+              "Pembayaran masih menunggu penyelesaian pelanggan.",
+          );
         }
       } else {
         toast.error(res.message || "Gagal memeriksa status pembayaran server.");
@@ -522,20 +620,35 @@ function PaymentModalContent({
     }
   };
 
-  // Deteksi otomatis jika pesanan sudah memiliki transaksi Snap aktif saat tab Midtrans dibuka
-  useEffect(() => {
-    if (method === "midtrans_snap" && !activeSnapToken) {
-      getOrderPaymentStatusAction(order.id).then((res) => {
-        if (res.ok && res.data?.activeSnapToken) {
-          setActiveSnapToken(res.data.activeSnapToken);
-          if (res.data.isSettled) {
-            toast.success(`Pesanan #${res.data.orderNumber} LUNAS terverifikasi!`);
-            onPaymentSuccess(order.id, true);
-          }
-        }
-      }).catch(() => {});
+  // Pembatalan aman reservasi Midtrans (wajib cek status aktual Midtrans dulu di server)
+  const handleCancelMidtransReservation = async () => {
+    if (isCancellingMidtrans || isVerifyingMidtrans || midtransWaiting) return;
+    setIsCancellingMidtrans(true);
+    try {
+      const res = await cancelActiveMidtransReservationAction(order.id);
+      setIsCancellingMidtrans(false);
+
+      if (!res.ok) {
+        toast.error(res.message);
+        void refreshPaymentSummary();
+        return;
+      }
+
+      if (res.data?.wasAlreadySettled) {
+        toast.success(res.message);
+        onPaymentSuccess(order.id, res.data.isSettled);
+        return;
+      }
+
+      setActiveSnapToken(null);
+      onRefreshIdempotencyKey();
+      toast.success(res.message);
+      await refreshPaymentSummary();
+    } catch {
+      setIsCancellingMidtrans(false);
+      toast.error("Gagal membatalkan reservasi Midtrans. Silakan coba lagi.");
     }
-  }, [method, order.id, activeSnapToken, onPaymentSuccess, setActiveSnapToken]);
+  };
 
   return (
     <>
@@ -564,7 +677,7 @@ function PaymentModalContent({
               Sisa Tagihan
             </span>
             <span className="text-base sm:text-lg font-bold font-display text-primary tracking-tight">
-              {formatRupiah(remainingBalance)}
+              {formatRupiah(effectiveRemainingBalance)}
             </span>
           </div>
         </div>
@@ -572,6 +685,122 @@ function PaymentModalContent({
 
       {/* Main Content */}
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-5 sm:px-6 py-5 space-y-5 text-xs">
+        {/* Banner jika pesanan ternyata sudah lunas di database */}
+        {isAlreadySettledInDb && (
+          <div className="rounded-2xl border border-emerald-500/35 bg-emerald-500/10 p-4 space-y-3 text-emerald-950 dark:text-emerald-100">
+            <div className="flex items-start gap-2.5">
+              <CheckCircle className="size-4.5 shrink-0 mt-0.5 text-emerald-600 dark:text-emerald-400" />
+              <div className="space-y-1 min-w-0">
+                <p className="font-bold text-xs sm:text-sm">
+                  Pesanan Ini Sudah Lunas
+                </p>
+                <p className="text-xs leading-relaxed text-emerald-900/85 dark:text-emerald-200/85">
+                  Seluruh tagihan pesanan #{order.order_number} telah tercatat lunas di sistem.
+                  Tidak diperlukan pembayaran tambahan. Klik tombol di bawah jika ingin melihat atau mencetak struk.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => onPaymentSuccess(order.id, true)}
+                className="h-9 px-4 text-xs font-bold gap-2 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700"
+              >
+                <Receipt className="size-3.5 shrink-0" />
+                <span>Lihat &amp; Cetak Struk</span>
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Banner Status Reservasi Gateway Midtrans (tampil jelas di Tab Tunai maupun Midtrans) */}
+        {!isAlreadySettledInDb && reservedAmount > 0 && (
+          <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 space-y-3 text-amber-950 dark:text-amber-100">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div className="flex items-start gap-2.5 min-w-0">
+                <Clock className="size-4.5 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+                <div className="space-y-1 min-w-0">
+                  <p className="font-bold text-xs sm:text-sm">
+                    {activeMidtransTx?.isExpired
+                      ? "Reservasi Midtrans Kedaluwarsa"
+                      : "Ada Transaksi Midtrans yang Masih Mereservasi Tagihan"}
+                  </p>
+                  <p className="text-xs leading-relaxed text-amber-900/90 dark:text-amber-200/90">
+                    {activeMidtransTx?.isExpired
+                      ? "Masa berlaku transaksi Midtrans sebelumnya sudah habis. Verifikasi status ke Midtrans atau batalkan reservasi agar pembayaran Tunai maupun Midtrans baru dapat dilanjutkan."
+                      : "Nominal sedang direservasi oleh transaksi Midtrans untuk mencegah pembayaran ganda. Cek status Midtrans jika pelanggan sudah membayar, atau batalkan reservasi Midtrans sebelum menerima pembayaran Tunai."}
+                  </p>
+                </div>
+              </div>
+              <Badge
+                variant="outline"
+                className="text-[11px] px-2.5 py-0.5 border-amber-500/45 bg-card/90 text-amber-800 dark:text-amber-300 font-semibold shrink-0"
+              >
+                {activeMidtransTx?.isExpired ? "Kedaluwarsa" : "Reservasi Aktif"}
+              </Badge>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 rounded-xl border border-amber-500/25 bg-card/80 px-3 py-2.5 text-[11px]">
+              <div>
+                <span className="text-muted-foreground block">Direservasi Midtrans</span>
+                <span className="font-mono font-bold text-foreground">
+                  {formatRupiah(reservedAmount)}
+                </span>
+              </div>
+              <div>
+                <span className="text-muted-foreground block">Tersedia untuk Tunai</span>
+                <span className="font-mono font-bold text-foreground">
+                  {formatRupiah(availableForCashAmount)}
+                </span>
+              </div>
+              <div className="min-w-0">
+                <span className="text-muted-foreground block">ID Transaksi Midtrans</span>
+                <span className="font-mono font-semibold text-foreground truncate block">
+                  {activeMidtransTx?.midtransOrderId || "-"}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2.5 pt-0.5">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={isVerifyingMidtrans || isCancellingMidtrans || isSubmitting || midtransWaiting}
+                onClick={checkServerPaymentStatus}
+                className="h-9 px-3.5 text-xs font-semibold gap-1.5 rounded-xl border-amber-600/35 bg-card hover:bg-amber-500/15"
+              >
+                <RefreshCw className={`size-3.5 shrink-0 ${isVerifyingMidtrans ? "animate-spin" : ""}`} />
+                <span>{isVerifyingMidtrans ? "Memeriksa Midtrans..." : "Cek Status Midtrans"}</span>
+              </Button>
+
+              {(activeMidtransTx?.canCancel ?? true) && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="destructive"
+                  disabled={isCancellingMidtrans || isVerifyingMidtrans || isSubmitting || midtransWaiting}
+                  onClick={handleCancelMidtransReservation}
+                  className="h-9 px-3.5 text-xs font-semibold gap-1.5 rounded-xl"
+                >
+                  {isCancellingMidtrans ? (
+                    <>
+                      <Loader2 className="size-3.5 animate-spin shrink-0" />
+                      <span>Membatalkan Reservasi...</span>
+                    </>
+                  ) : (
+                    <>
+                      <XCircle className="size-3.5 shrink-0" />
+                      <span>Batalkan Midtrans &amp; Lepas Reservasi</span>
+                    </>
+                  )}
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Mode Split Bill Selector */}
         <div className="rounded-2xl border border-border/80 bg-muted/15 p-4 space-y-3.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -652,7 +881,7 @@ function PaymentModalContent({
                 <Input
                   type="number"
                   min={1}
-                  max={remainingBalance}
+                  max={effectiveRemainingBalance}
                   value={customAmount || ""}
                   onChange={(e) => setCustomAmount(parseInt(e.target.value, 10) || 0)}
                   className="pl-10 h-10 text-sm font-mono font-bold rounded-xl bg-card"
@@ -758,6 +987,26 @@ function PaymentModalContent({
           {/* TAB 1: TUNAI (CASH) */}
           {method === "cash" && (
             <div className="rounded-2xl border border-border/80 bg-card p-4 sm:p-5 space-y-4">
+              {isCashBlockedByReservation && !isAlreadySettledInDb && (
+                <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3.5 text-xs text-destructive space-y-1.5">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="size-4 shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <p className="font-bold">
+                        Pembayaran Tunai {formatRupiah(payAmount)} Tertahan Reservasi Midtrans
+                      </p>
+                      <p className="leading-relaxed">
+                        Saat ini tersisa {formatRupiah(availableForCashAmount)} yang bebas untuk Tunai
+                        karena {formatRupiah(reservedAmount)} masih direservasi oleh transaksi Midtrans.
+                        Klik <strong>Cek Status Midtrans</strong> atau{" "}
+                        <strong>Batalkan Midtrans &amp; Lepas Reservasi</strong> di panel atas sebelum
+                        melanjutkan pembayaran Tunai.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-2">
                 <Label className="text-xs font-semibold text-foreground">
                   Uang Tunai Diterima (Cash Received)
@@ -846,7 +1095,8 @@ function PaymentModalContent({
               </div>
               <p className="text-xs text-muted-foreground leading-relaxed">
                 Membuka popup pembayaran Snap terintegrasi. Pelanggan dapat membayar via simulator QRIS,
-                GoPay, ShopeePay, atau Virtual Account bank.
+                GoPay, ShopeePay, atau Virtual Account bank. Pesanan hanya dianggap lunas setelah
+                settlement diverifikasi server Midtrans.
               </p>
 
               {snapLoadError && (
@@ -857,7 +1107,7 @@ function PaymentModalContent({
               )}
 
               {/* Status Box & Tombol Cek Status */}
-              {activeSnapToken ? (
+              {activeSnapToken && (activeMidtransTx?.canReopenSnap ?? true) ? (
                 <div className="rounded-xl border border-primary/20 bg-card/85 p-4 space-y-3.5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2 font-semibold text-xs text-foreground">
@@ -865,33 +1115,91 @@ function PaymentModalContent({
                       <span>Transaksi Snap Aktif</span>
                     </div>
                     <Badge variant="secondary" className="text-[11px] px-2.5 py-0.5 font-mono">
-                      Menunggu Verifikasi
+                      {activeMidtransTx?.lifecycleStatus === "pending"
+                        ? "Pending di Midtrans"
+                        : "Menunggu Pembayaran"}
                     </Badge>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
                     <Button
                       type="button"
                       size="default"
                       variant="default"
-                      disabled={isVerifyingMidtrans || isSubmitting}
+                      disabled={isVerifyingMidtrans || isCancellingMidtrans || isSubmitting}
                       onClick={checkServerPaymentStatus}
-                      className="h-10 px-4 text-xs font-bold gap-2 bg-primary text-primary-foreground shadow-xs rounded-xl"
+                      className="h-10 px-3.5 text-xs font-bold gap-2 bg-primary text-primary-foreground shadow-xs rounded-xl"
                     >
                       <RefreshCw className={`size-3.5 shrink-0 ${isVerifyingMidtrans ? "animate-spin" : ""}`} />
-                      <span>{isVerifyingMidtrans ? "Memeriksa Status..." : "Cek Status Pembayaran"}</span>
+                      <span>{isVerifyingMidtrans ? "Memeriksa..." : "Cek Status"}</span>
                     </Button>
 
                     <Button
                       type="button"
                       size="default"
                       variant="outline"
-                      disabled={isVerifyingMidtrans || isSubmitting || midtransWaiting}
+                      disabled={isVerifyingMidtrans || isCancellingMidtrans || isSubmitting || midtransWaiting}
                       onClick={() => triggerSnapPopup(activeSnapToken)}
-                      className="h-10 px-4 text-xs font-semibold gap-2 border-primary/40 bg-card hover:bg-primary/10 rounded-xl"
+                      className="h-10 px-3.5 text-xs font-semibold gap-2 border-primary/40 bg-card hover:bg-primary/10 rounded-xl"
                     >
                       <ExternalLink className="size-3.5 shrink-0" />
                       <span>Buka Ulang Snap</span>
+                    </Button>
+
+                    <Button
+                      type="button"
+                      size="default"
+                      variant="outline"
+                      disabled={isCancellingMidtrans || isVerifyingMidtrans || isSubmitting || midtransWaiting}
+                      onClick={handleCancelMidtransReservation}
+                      className="h-10 px-3.5 text-xs font-semibold gap-2 border-destructive/40 text-destructive hover:bg-destructive/10 rounded-xl"
+                    >
+                      <XCircle className="size-3.5 shrink-0" />
+                      <span>{isCancellingMidtrans ? "Membatalkan..." : "Batalkan"}</span>
+                    </Button>
+                  </div>
+                </div>
+              ) : activeMidtransTx && !isAlreadySettledInDb ? (
+                <div className="rounded-xl border border-amber-500/35 bg-card/90 p-4 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 font-semibold text-xs text-foreground">
+                      <AlertCircle className="size-4 text-amber-600 shrink-0" />
+                      <span>
+                        {activeMidtransTx.isExpired
+                          ? "Token Snap Sebelumnya Sudah Kedaluwarsa"
+                          : "Transaksi Midtrans Sebelumnya Tidak Dapat Dibuka Ulang"}
+                      </span>
+                    </div>
+                    <Badge variant="outline" className="text-[11px] px-2.5 py-0.5 font-mono">
+                      {activeMidtransTx.isExpired ? "Expired" : activeMidtransTx.lifecycleStatus}
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    Verifikasi status ke Midtrans atau batalkan reservasi terlebih dahulu agar
+                    Anda bisa membuka transaksi Midtrans Snap baru atau membayar Tunai.
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <Button
+                      type="button"
+                      size="default"
+                      variant="default"
+                      disabled={isVerifyingMidtrans || isCancellingMidtrans || isSubmitting}
+                      onClick={checkServerPaymentStatus}
+                      className="h-10 px-4 text-xs font-bold gap-2 rounded-xl"
+                    >
+                      <RefreshCw className={`size-3.5 shrink-0 ${isVerifyingMidtrans ? "animate-spin" : ""}`} />
+                      <span>{isVerifyingMidtrans ? "Memverifikasi..." : "Verifikasi & Lepas Reservasi"}</span>
+                    </Button>
+                    <Button
+                      type="button"
+                      size="default"
+                      variant="destructive"
+                      disabled={isCancellingMidtrans || isVerifyingMidtrans || isSubmitting}
+                      onClick={handleCancelMidtransReservation}
+                      className="h-10 px-4 text-xs font-semibold gap-2 rounded-xl"
+                    >
+                      <XCircle className="size-3.5 shrink-0" />
+                      <span>{isCancellingMidtrans ? "Membatalkan..." : "Batalkan & Lepas Reservasi"}</span>
                     </Button>
                   </div>
                 </div>
@@ -930,21 +1238,31 @@ function PaymentModalContent({
           type="button"
           variant="outline"
           size="default"
-          disabled={isSubmitting || midtransWaiting}
+          disabled={isSubmitting || isCancellingMidtrans || midtransWaiting}
           onClick={onClose}
           className="h-11 px-5 text-xs sm:text-sm font-semibold rounded-xl border-border/80 bg-card hover:bg-muted w-full sm:w-auto"
         >
-          Batal
+          {isAlreadySettledInDb ? "Tutup" : "Batal"}
         </Button>
 
-        {method === "midtrans_snap" ? (
-          activeSnapToken ? (
+        {isAlreadySettledInDb ? (
+          <Button
+            type="button"
+            size="default"
+            onClick={() => onPaymentSuccess(order.id, true)}
+            className="h-11 px-6 text-xs sm:text-sm font-bold bg-emerald-600 text-white shadow-sm rounded-xl gap-2 hover:bg-emerald-700 w-full sm:w-auto"
+          >
+            <Receipt className="size-4 shrink-0" />
+            <span>Lihat &amp; Cetak Struk</span>
+          </Button>
+        ) : method === "midtrans_snap" ? (
+          activeSnapToken && (activeMidtransTx?.canReopenSnap ?? true) ? (
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto">
               <Button
                 type="button"
                 size="default"
                 variant="outline"
-                disabled={isSubmitting || isVerifyingMidtrans || midtransWaiting}
+                disabled={isSubmitting || isVerifyingMidtrans || isCancellingMidtrans || midtransWaiting}
                 onClick={() => triggerSnapPopup(activeSnapToken)}
                 className="h-11 px-4 text-xs sm:text-sm font-semibold rounded-xl border-primary/40 bg-card hover:bg-primary/10 gap-2"
               >
@@ -954,7 +1272,7 @@ function PaymentModalContent({
               <Button
                 type="button"
                 size="default"
-                disabled={isSubmitting || isVerifyingMidtrans}
+                disabled={isSubmitting || isVerifyingMidtrans || isCancellingMidtrans}
                 onClick={checkServerPaymentStatus}
                 className="h-11 px-5 sm:px-6 text-xs sm:text-sm font-bold bg-primary text-primary-foreground shadow-sm rounded-xl gap-2 hover:bg-primary/90"
               >
@@ -962,11 +1280,41 @@ function PaymentModalContent({
                 <span>{isVerifyingMidtrans ? "Memeriksa..." : "Cek Status Pembayaran"}</span>
               </Button>
             </div>
+          ) : activeMidtransTx ? (
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto">
+              <Button
+                type="button"
+                size="default"
+                variant="destructive"
+                disabled={isSubmitting || isVerifyingMidtrans || isCancellingMidtrans || midtransWaiting}
+                onClick={handleCancelMidtransReservation}
+                className="h-11 px-4 text-xs sm:text-sm font-semibold rounded-xl gap-2"
+              >
+                <XCircle className="size-4 shrink-0" />
+                <span>{isCancellingMidtrans ? "Membatalkan..." : "Batalkan Reservasi"}</span>
+              </Button>
+              <Button
+                type="button"
+                size="default"
+                disabled={isSubmitting || isVerifyingMidtrans || isCancellingMidtrans}
+                onClick={checkServerPaymentStatus}
+                className="h-11 px-5 sm:px-6 text-xs sm:text-sm font-bold bg-primary text-primary-foreground shadow-sm rounded-xl gap-2 hover:bg-primary/90"
+              >
+                <RefreshCw className={`size-4 shrink-0 ${isVerifyingMidtrans ? "animate-spin" : ""}`} />
+                <span>{isVerifyingMidtrans ? "Memeriksa..." : "Cek Status Midtrans"}</span>
+              </Button>
+            </div>
           ) : (
             <Button
               type="button"
               size="default"
-              disabled={isSubmitting || midtransWaiting || payAmount <= 0}
+              disabled={
+                isSubmitting ||
+                isVerifyingMidtrans ||
+                isCancellingMidtrans ||
+                midtransWaiting ||
+                payAmount <= 0
+              }
               onClick={handleOpenMidtransSnap}
               className="h-11 px-6 text-xs sm:text-sm font-bold bg-primary text-primary-foreground shadow-sm rounded-xl gap-2 hover:bg-primary/90 w-full sm:w-auto"
             >
@@ -994,9 +1342,12 @@ function PaymentModalContent({
             size="default"
             disabled={
               isSubmitting ||
+              isVerifyingMidtrans ||
+              isCancellingMidtrans ||
               midtransWaiting ||
               payAmount <= 0 ||
-              (method === "cash" && isCashDeficit)
+              isCashDeficit ||
+              isCashBlockedByReservation
             }
             onClick={handleProcessManualPayment}
             className="h-11 px-6 text-xs sm:text-sm font-bold bg-primary text-primary-foreground shadow-sm rounded-xl gap-2 hover:bg-primary/90 w-full sm:w-auto"
