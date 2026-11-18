@@ -1,10 +1,13 @@
 import "server-only";
 
-import { createHash } from "node:crypto";
-import { getMidtransConfig } from "./config";
+import { getMidtransConfigState } from "./config";
 import { getMidtransStatus, type MidtransStatusResponse } from "./recovery";
+import { parseMidtransGrossAmount } from "./signature";
 import { isMidtransPaidStatus } from "./status";
-import { processMidtransWebhook, type MidtransWebhookPayload } from "./webhook";
+import {
+  settleVerifiedMidtransStatus,
+  type MidtransStatusSettlementPayload,
+} from "./webhook";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export type ReconcileOrderResult = {
@@ -25,27 +28,41 @@ export type ReconcileActiveMidtransParams = {
 };
 
 /**
- * Melakukan rekonsiliasi aktif status transaksi Midtrans langsung ke Midtrans Core API.
+ * Melakukan rekonsiliasi aktif status transaksi Midtrans langsung ke Midtrans Core API
+ * (`GET /v2/{order_id}/status`) menggunakan Server Key resmi melalui HTTPS Basic Auth.
  *
- * Alur Kerja:
+ * Alur Kerja Keamanan:
  * 1. Ambil transaksi Midtrans terakhir untuk orderId internal dari tabel midtrans_transactions.
- * 2. Periksa status langsung ke Midtrans Core API menggunakan Server Key resmi.
- * 3. Validasi order_id, gross_amount, currency, transaction_status, dan fraud_status.
- * 4. Jika settlement (atau capture + fraud_status accept), mutasikan status ke database melalui
- *    handler settlement aman yang idempoten (processMidtransWebhook / execute_midtrans_webhook_settlement).
- * 5. Jika status terminal gagal (expire, cancel, deny), perbarui status transaksi lokal dan lepas reservasi.
+ * 2. Periksa status langsung ke Midtrans Core API (Sandbox/Production sesuai config, tanpa fallback).
+ * 3. Validasi ketat:
+ *    - order_id === midtrans_order_id lokal
+ *    - gross_amount string persis === gross_amount lokal (tanpa float drift)
+ *    - currency === "IDR"
+ *    - status_code valid
+ *    - transaction_status & fraud_status
+ * 4. Karena respons berasal langsung dari Midtrans Core API over HTTPS + Basic Auth Server Key,
+ *    mutasi settlement dieksekusi melalui `settleVerifiedMidtransStatus()` (RPC atomik & idempoten
+ *    `execute_midtrans_webhook_settlement`), BUKAN melempar `signature_key` respons GET Status
+ *    ke validator HTTP webhook eksternal.
+ * 5. Jika status terminal gagal (expire, cancel, deny), perbarui status terminal & lepas reservasi.
  * 6. Jika status pending, perbarui lifecycle lokal menjadi pending.
- * 7. Kembalikan status terkini dan terverifikasi ke pemanggil.
  */
 export async function reconcileActiveMidtransPayment({
   orderId,
 }: ReconcileActiveMidtransParams): Promise<ReconcileOrderResult> {
-  const config = getMidtransConfig();
-  if (!config) {
+  const configState = getMidtransConfigState();
+  if (!configState.enabled) {
     return {
       ok: false,
       isSettled: false,
-      error: "Konfigurasi Midtrans tidak aktif di server.",
+      error: "Integrasi Midtrans tidak aktif di server.",
+    };
+  }
+  if (!configState.ok) {
+    return {
+      ok: false,
+      isSettled: false,
+      error: configState.error,
     };
   }
 
@@ -86,7 +103,9 @@ export async function reconcileActiveMidtransPayment({
   // 2. Ambil transaksi Midtrans terakhir untuk pesanan ini
   const { data: latestMidtransTx, error: txErr } = await adminClient
     .from("midtrans_transactions")
-    .select("id, midtrans_order_id, gross_amount, lifecycle_status, snap_token, snap_redirect_url")
+    .select(
+      "id, midtrans_order_id, gross_amount, lifecycle_status, snap_token, snap_redirect_url",
+    )
     .eq("order_id", orderId)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -104,7 +123,7 @@ export async function reconcileActiveMidtransPayment({
 
   const midtransOrderId = latestMidtransTx.midtrans_order_id;
 
-  // 3. Periksa status langsung ke Midtrans Core API
+  // 3. Periksa status langsung ke Midtrans Core API (HTTPS + Basic Auth ServerKey)
   const statusCheck = await getMidtransStatus(midtransOrderId);
 
   if (!statusCheck.ok) {
@@ -115,7 +134,8 @@ export async function reconcileActiveMidtransPayment({
         isSettled: false,
         orderNumber: order.order_number,
         midtransStatus: "uncreated_or_pending",
-        message: "Transaksi belum diproses di Midtrans. Menunggu pelanggan memilih metode pembayaran.",
+        message:
+          "Transaksi belum diproses di Midtrans. Menunggu pelanggan memilih metode pembayaran.",
       };
     }
 
@@ -137,7 +157,7 @@ export async function reconcileActiveMidtransPayment({
     };
   }
 
-  // 4. Validasi Keamanan Payload Respons Midtrans
+  // 4. Validasi Keamanan Payload Respons Midtrans Core API
   // a. Validasi kesesuaian order_id
   if (midtransData.order_id !== midtransOrderId) {
     return {
@@ -148,19 +168,27 @@ export async function reconcileActiveMidtransPayment({
     };
   }
 
-  // b. Validasi kesesuaian gross_amount
-  const reportedGrossNumeric = Math.round(Number.parseFloat(midtransData.gross_amount));
-  if (reportedGrossNumeric !== latestMidtransTx.gross_amount) {
+  // b. Validasi ketat gross_amount (string eksak tanpa floating-point drift)
+  const reportedGrossNumeric = parseMidtransGrossAmount(
+    midtransData.gross_amount,
+  );
+  if (
+    reportedGrossNumeric === null ||
+    reportedGrossNumeric !== latestMidtransTx.gross_amount
+  ) {
     return {
       ok: false,
       isSettled: false,
       orderNumber: order.order_number,
-      error: `Nominal transaksi Midtrans (${reportedGrossNumeric}) tidak cocok dengan tagihan lokal (${latestMidtransTx.gross_amount}).`,
+      error: `Nominal transaksi Midtrans (${midtransData.gross_amount}) tidak cocok dengan tagihan lokal (${latestMidtransTx.gross_amount}).`,
     };
   }
 
   // c. Validasi mata uang (wajib IDR)
-  const reportedCurrency = typeof midtransData.currency === "string" ? midtransData.currency.trim().toUpperCase() : "IDR";
+  const reportedCurrency =
+    typeof midtransData.currency === "string"
+      ? midtransData.currency.trim().toUpperCase()
+      : "IDR";
   if (reportedCurrency !== "IDR") {
     return {
       ok: false,
@@ -170,95 +198,125 @@ export async function reconcileActiveMidtransPayment({
     };
   }
 
+  // d. Validasi status_code
+  const statusCode =
+    typeof midtransData.status_code === "string"
+      ? midtransData.status_code.trim()
+      : "";
+  if (!statusCode) {
+    return {
+      ok: false,
+      isSettled: false,
+      orderNumber: order.order_number,
+      error: "Respons status Midtrans tidak memiliki status_code yang valid.",
+    };
+  }
+
   const rawStatus = (midtransData.transaction_status || "").trim().toLowerCase();
   const fraudStatus = (midtransData.fraud_status || "").trim().toLowerCase();
 
-  // Pastikan signature_key ada untuk verifikasi webhook yang sah
-  // Jika Midtrans API mengembalikan signature_key, gunakan apa adanya.
-  // Jika signature_key tidak disertakan oleh SDK/endpoint tertentu, hitung signature resmi:
-  // SHA512(order_id + status_code + gross_amount + server_key)
-  let signatureKey = typeof midtransData.signature_key === "string" ? midtransData.signature_key.trim() : "";
-  if (!signatureKey && midtransData.status_code && midtransData.gross_amount) {
-    signatureKey = createHash("sha512")
-      .update(`${midtransOrderId}${midtransData.status_code}${midtransData.gross_amount}${config.serverKey}`)
-      .digest("hex");
-  }
+  // Sanitasi payload dari signature_key sebelum diteruskan ke settlement engine
+  const sanitizedStatusFields = Object.fromEntries(
+    Object.entries(midtransData).filter(([k]) => k !== "signature_key"),
+  );
 
-  const webhookPayload: MidtransWebhookPayload = {
-    ...midtransData,
+  const verifiedPayload: MidtransStatusSettlementPayload = {
+    ...sanitizedStatusFields,
     order_id: midtransOrderId,
-    status_code: midtransData.status_code,
+    status_code: statusCode,
     gross_amount: midtransData.gross_amount,
-    signature_key: signatureKey,
     transaction_status: rawStatus,
     fraud_status: fraudStatus,
     currency: reportedCurrency,
     transaction_id: midtransData.transaction_id,
+    payment_type: midtransData.payment_type,
   };
 
   // 5. Pemetaan Status & Penanganan Rekonsiliasi
   const isPaid = isMidtransPaidStatus(rawStatus, fraudStatus);
 
   if (isPaid) {
-    // Eksekusi settlement atomik via domain handler processMidtransWebhook
-    const webhookResult = await processMidtransWebhook(webhookPayload);
+    const settleResult = await settleVerifiedMidtransStatus(verifiedPayload);
 
-    if (!webhookResult.ok && webhookResult.processingResult === "failed") {
+    if (!settleResult.ok && settleResult.processingResult === "failed") {
       return {
         ok: false,
         isSettled: false,
         orderNumber: order.order_number,
         midtransStatus: rawStatus,
-        error: webhookResult.error || "Gagal memproses settlement pembayaran ke database.",
+        error:
+          settleResult.error ||
+          "Gagal memproses settlement pembayaran ke database.",
       };
     }
 
-    // Ambil ulang status pesanan segar dari DB untuk memverifikasi pelunasan
-    const { data: refreshedOrder } = await adminClient
-      .from("orders")
-      .select("status, payment_status, paid_total")
-      .eq("id", orderId)
-      .maybeSingle();
+    // Ambil ulang status pesanan & transaksi segar dari DB untuk memverifikasi pelunasan
+    const [{ data: refreshedOrder }, { data: refreshedTx }] = await Promise.all([
+      adminClient
+        .from("orders")
+        .select("status, payment_status, paid_total")
+        .eq("id", orderId)
+        .maybeSingle(),
+      adminClient
+        .from("midtrans_transactions")
+        .select("lifecycle_status")
+        .eq("id", latestMidtransTx.id)
+        .maybeSingle(),
+    ]);
 
-    const isNowSettled =
-      refreshedOrder?.payment_status === "paid" || refreshedOrder?.status === "paid";
+    const isOrderFullySettled =
+      refreshedOrder?.payment_status === "paid" ||
+      refreshedOrder?.status === "paid";
+    const isTxSettled = refreshedTx?.lifecycle_status === "settled";
 
     return {
       ok: true,
-      isSettled: isNowSettled,
+      isSettled: isOrderFullySettled,
       orderNumber: order.order_number,
       midtransStatus: rawStatus,
-      statusCode: midtransData.status_code,
-      message: isNowSettled
-        ? "Pembayaran Midtrans berhasil diverifikasi dan diselesaikan."
-        : "Pembayaran terverifikasi di Midtrans, menunggu pembaruan database.",
+      statusCode,
+      message: isOrderFullySettled
+        ? "Pembayaran Midtrans berhasil diverifikasi dan pesanan telah lunas."
+        : isTxSettled
+          ? "Pembayaran bagian Midtrans berhasil diverifikasi (split bill tercatat)."
+          : "Pembayaran terverifikasi di Midtrans, menunggu pembaruan database.",
     };
   }
 
   // Jika status terminal gagal (expire, cancel, deny):
   if (["expire", "cancel", "deny"].includes(rawStatus)) {
-    // Kirimkan ke webhook handler agar status terminal dan pelepasan alokasi dicatat di database
-    await processMidtransWebhook(webhookPayload);
+    const terminalResult = await settleVerifiedMidtransStatus(verifiedPayload);
+    if (!terminalResult.ok && terminalResult.processingResult === "failed") {
+      return {
+        ok: false,
+        isSettled: false,
+        orderNumber: order.order_number,
+        midtransStatus: rawStatus,
+        statusCode,
+        error:
+          terminalResult.error ||
+          `Gagal mencatat status terminal Midtrans (${rawStatus}).`,
+      };
+    }
 
     return {
       ok: true,
       isSettled: false,
       orderNumber: order.order_number,
       midtransStatus: rawStatus,
-      statusCode: midtransData.status_code,
+      statusCode,
       message: `Transaksi Midtrans telah berakhir dengan status: ${rawStatus}.`,
     };
   }
 
   // Jika status pending:
   if (rawStatus === "pending") {
-    // Perbarui lifecycle lokal transaksi menjadi pending jika belum
     await adminClient
       .from("midtrans_transactions")
       .update({
         lifecycle_status: "pending",
         midtrans_transaction_status: "pending",
-        sanitized_response: midtransData,
+        sanitized_response: sanitizedStatusFields,
         updated_at: new Date().toISOString(),
       })
       .eq("id", latestMidtransTx.id);
@@ -268,18 +326,18 @@ export async function reconcileActiveMidtransPayment({
       isSettled: false,
       orderNumber: order.order_number,
       midtransStatus: "pending",
-      statusCode: midtransData.status_code,
+      statusCode,
       message: "Pembayaran masih menunggu penyelesaian dari pelanggan.",
     };
   }
 
-  // Status lainnya
+  // Status lainnya (mis. challenge)
   return {
     ok: true,
     isSettled: false,
     orderNumber: order.order_number,
     midtransStatus: rawStatus,
-    statusCode: midtransData.status_code,
+    statusCode,
     message: `Status transaksi Midtrans: ${rawStatus}.`,
   };
 }

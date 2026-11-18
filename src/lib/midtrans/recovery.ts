@@ -1,6 +1,6 @@
 import "server-only";
 
-import { getMidtransConfig } from "./config";
+import { getMidtransConfigState } from "./config";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export type MidtransStatusResponse = {
@@ -35,11 +35,17 @@ export type CancelTransactionResult = {
  * Fetches transaction status from Midtrans Core API.
  */
 export async function getMidtransStatus(orderId: string): Promise<CheckStatusResult> {
-  const config = getMidtransConfig();
+  const configState = getMidtransConfigState();
 
-  if (!config) {
+  if (!configState.enabled) {
     return { ok: false, error: "Konfigurasi Midtrans tidak aktif." };
   }
+
+  if (!configState.ok) {
+    return { ok: false, error: configState.error };
+  }
+
+  const config = configState.config;
 
   const authHeader = `Basic ${Buffer.from(`${config.serverKey}:`).toString("base64")}`;
 
@@ -83,11 +89,17 @@ export async function getMidtransStatus(orderId: string): Promise<CheckStatusRes
  * Cancels a Midtrans transaction via POST /v2/{order_id}/cancel.
  */
 export async function cancelMidtransTransaction(orderId: string): Promise<CancelTransactionResult> {
-  const config = getMidtransConfig();
+  const configState = getMidtransConfigState();
 
-  if (!config) {
+  if (!configState.enabled) {
     return { ok: false, error: "Konfigurasi Midtrans tidak aktif." };
   }
+
+  if (!configState.ok) {
+    return { ok: false, error: configState.error };
+  }
+
+  const config = configState.config;
 
   const authHeader = `Basic ${Buffer.from(`${config.serverKey}:`).toString("base64")}`;
 

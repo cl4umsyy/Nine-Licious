@@ -1,5 +1,6 @@
 import {
   ChefHat,
+  ClipboardList,
   LayoutDashboard,
   MapPin,
   MonitorPlay,
@@ -61,6 +62,13 @@ export const NAV_ITEMS: NavItem[] = [
     label: "Kasir",
     description: "Transaksi, meja, dan pembayaran.",
     icon: ShoppingCart,
+    roles: ["admin", "kasir"],
+  },
+  {
+    href: "/pos/orders",
+    label: "Daftar Pesanan",
+    description: "Pantau pesanan aktif, pembayaran, dapur, dan penyajian.",
+    icon: ClipboardList,
     roles: ["admin", "kasir"],
   },
   {

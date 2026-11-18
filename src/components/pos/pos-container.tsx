@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { ChevronRight, ShoppingBag, Utensils } from "lucide-react";
 import { toast } from "sonner";
 import { CartPanel } from "@/components/pos/cart-panel";
@@ -33,6 +34,7 @@ import type {
   DiningTable,
   Discount,
   MenuCategory,
+  TableStatus,
   TableZone,
 } from "@/types/database";
 
@@ -57,6 +59,27 @@ export function PosContainer({
   discounts = [],
   userRole = "kasir",
 }: PosContainerProps) {
+  const router = useRouter();
+  const [tableStatusOverrides, setTableStatusOverrides] = useState<
+    Record<string, TableStatus>
+  >({});
+
+  const effectiveTables = useMemo(
+    () =>
+      tables.map((t) =>
+        tableStatusOverrides[t.id]
+          ? { ...t, status: tableStatusOverrides[t.id] }
+          : t,
+      ),
+    [tables, tableStatusOverrides],
+  );
+
+  const [prevTablesProp, setPrevTablesProp] = useState(tables);
+  if (tables !== prevTablesProp) {
+    setPrevTablesProp(tables);
+    setTableStatusOverrides({});
+  }
+
   // Cart & Order State
   const [cart, setCart] = useState<CartItem[]>([]);
   const [orderType, setOrderType] = useState<"dine_in" | "takeaway">("dine_in");
@@ -68,6 +91,17 @@ export function PosContainer({
     useState<OrderWithDetails | null>(null);
   const [customerName, setCustomerName] = useState("");
   const [orderNotes, setOrderNotes] = useState("");
+
+  const handleTableStatusChanged = (tableId: string, nextStatus: TableStatus) => {
+    setTableStatusOverrides((prev) => ({ ...prev, [tableId]: nextStatus }));
+    setSelectedTable((prev) =>
+      prev && prev.id === tableId ? { ...prev, status: nextStatus } : prev,
+    );
+    if (nextStatus === "empty" && selectedTable?.id === tableId) {
+      setActiveTableOrder(null);
+    }
+    router.refresh();
+  };
 
   // Discount States
   const [selectedOrderPromo, setSelectedOrderPromo] =
@@ -320,6 +354,9 @@ export function PosContainer({
         setConfirmedOrder(result.data);
         handleClearCart();
         setActiveTableOrder(null);
+        if (orderType === "dine_in" && selectedTable) {
+          handleTableStatusChanged(selectedTable.id, "awaiting_payment");
+        }
       } else {
         toast.error(result.message || "Gagal menyimpan pesanan.");
       }
@@ -329,12 +366,12 @@ export function PosContainer({
   return (
     <>
       {/* Mobile Tab Switcher */}
-      <div className="flex lg:hidden items-center justify-between p-1 bg-muted/60 rounded-xl border mb-3">
+      <div className="flex lg:hidden items-center justify-between gap-1.5 p-1.5 bg-muted/60 rounded-2xl border mb-3.5 shrink-0">
         <button
           type="button"
           onClick={() => setMobileTab("catalog")}
           className={cn(
-            "flex-1 py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5",
+            "flex-1 py-2.5 px-3 text-xs font-semibold rounded-xl transition-all flex items-center justify-center gap-2",
             mobileTab === "catalog"
               ? "bg-card text-foreground shadow-xs"
               : "text-muted-foreground hover:text-foreground",
@@ -347,7 +384,7 @@ export function PosContainer({
           type="button"
           onClick={() => setMobileTab("cart")}
           className={cn(
-            "flex-1 py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5",
+            "flex-1 py-2.5 px-3 text-xs font-semibold rounded-xl transition-all flex items-center justify-center gap-2",
             mobileTab === "cart"
               ? "bg-card text-primary shadow-xs"
               : "text-muted-foreground hover:text-foreground",
@@ -366,11 +403,11 @@ export function PosContainer({
         </button>
       </div>
 
-      <div className="flex-1 min-h-0 flex flex-col lg:grid lg:grid-cols-[1fr_380px] xl:grid-cols-[1fr_420px] gap-3">
+      <div className="flex-1 min-h-0 flex flex-col lg:grid lg:grid-cols-[minmax(0,1fr)_390px] xl:grid-cols-[minmax(0,1fr)_420px] gap-5 xl:gap-6">
         {/* Left: Product Catalog */}
         <div
           className={cn(
-            "h-full min-h-0 overflow-hidden flex flex-col",
+            "h-full min-h-0 min-w-0 overflow-hidden flex flex-col",
             mobileTab !== "catalog" && "hidden lg:flex",
           )}
         >
@@ -384,7 +421,7 @@ export function PosContainer({
         {/* Right: Cart Panel */}
         <div
           className={cn(
-            "h-full min-h-0 overflow-hidden flex flex-col",
+            "h-full min-h-0 min-w-0 overflow-hidden flex flex-col",
             mobileTab !== "cart" && "hidden lg:flex",
           )}
         >
@@ -460,10 +497,11 @@ export function PosContainer({
       <TableSelectModal
         isOpen={isTableModalOpen}
         onClose={() => setIsTableModalOpen(false)}
-        tables={tables}
+        tables={effectiveTables}
         zones={zones}
         selectedTableId={selectedTable?.id}
         onSelectTable={handleSelectTable}
+        onTableStatusChanged={handleTableStatusChanged}
       />
 
       <OrderConfirmationModal
@@ -500,12 +538,19 @@ export function PosContainer({
           setPaymentOrder(null);
         }}
         onPaymentSuccess={(orderId, isSettled) => {
+          const settledTableId = paymentOrder?.table_id;
           setPaymentOrder(null);
           if (isSettled) {
             setConfirmedOrder(null);
             setReceiptOrderId(orderId);
+            if (settledTableId) {
+              handleTableStatusChanged(settledTableId, "occupied");
+            } else {
+              router.refresh();
+            }
           } else {
             toast.info("Pembayaran parsial berhasil dicatat.");
+            router.refresh();
             if (paymentOrder) {
               setConfirmedOrder(paymentOrder);
             }
@@ -526,6 +571,7 @@ export function PosContainer({
         onSuccess={() => {
           setOrderToCancel(null);
           setActiveTableOrder(null);
+          router.refresh();
         }}
       />
     </>

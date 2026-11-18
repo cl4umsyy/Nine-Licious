@@ -1,8 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Check, Grid2X2, Layers, MapPin, Users, Utensils } from "lucide-react";
+import { Check, DoorOpen, Grid2X2, Layers, MapPin, Users, Utensils } from "lucide-react";
 import { FloorPlanCanvas } from "@/components/tables/floor-plan-canvas";
+import { TableSessionDialog } from "@/components/tables/table-session-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,6 +28,7 @@ export type TableSelectModalProps = {
   zones: TableZone[];
   selectedTableId?: string | null;
   onSelectTable: (table: DiningTable) => void;
+  onTableStatusChanged?: (tableId: string, nextStatus: TableStatus) => void;
 };
 
 const STATUS_BADGE_CLASSES: Record<TableStatus, string> = {
@@ -42,6 +44,7 @@ export function TableSelectModal({
   zones,
   selectedTableId,
   onSelectTable,
+  onTableStatusChanged,
 }: TableSelectModalProps) {
   const [activeZoneId, setActiveZoneId] = useState<string>(
     zones[0]?.id ?? "",
@@ -50,12 +53,16 @@ export function TableSelectModal({
     () => tables.find((t) => t.id === selectedTableId) ?? null,
   );
   const [viewMode, setViewMode] = useState<"floor-plan" | "grid">("floor-plan");
+  const [sessionInspectTable, setSessionInspectTable] = useState<DiningTable | null>(null);
 
-  // Sync selected table when prop changes
+  // Sync selected table when prop changes or when tables statuses refresh
   const [prevSelectedId, setPrevSelectedId] = useState(selectedTableId);
-  if (selectedTableId !== prevSelectedId) {
+  const [prevTables, setPrevTables] = useState(tables);
+  if (selectedTableId !== prevSelectedId || tables !== prevTables) {
     setPrevSelectedId(selectedTableId);
-    setTempSelectedTable(tables.find((t) => t.id === selectedTableId) ?? null);
+    setPrevTables(tables);
+    const targetId = selectedTableId !== prevSelectedId ? selectedTableId : tempSelectedTable?.id;
+    setTempSelectedTable(tables.find((t) => t.id === targetId) ?? null);
   }
 
   const currentZone = useMemo(
@@ -75,7 +82,15 @@ export function TableSelectModal({
     }
   };
 
+  const handleSessionClosed = (tableId: string) => {
+    onTableStatusChanged?.(tableId, "empty");
+    setTempSelectedTable((prev) =>
+      prev && prev.id === tableId ? { ...prev, status: "empty" } : prev,
+    );
+  };
+
   return (
+    <>
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="w-[calc(100vw-32px)] sm:max-w-4xl md:max-w-5xl lg:max-w-5xl max-h-[calc(100dvh-32px)] flex flex-col p-0 gap-0 overflow-hidden shadow-2xl rounded-2xl">
         {/* Header Modal */}
@@ -268,7 +283,7 @@ export function TableSelectModal({
         </div>
 
         {/* Footer */}
-        <DialogFooter className="p-4 sm:p-5 px-4 sm:px-6 border-t bg-muted/20 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3.5 shrink-0">
+        <DialogFooter className="mx-0 mb-0 p-4 sm:p-5 px-4 sm:px-6 border-t bg-muted/20 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3.5 shrink-0">
           <div className="text-xs text-muted-foreground flex-1 min-w-0">
             {tempSelectedTable ? (
               <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
@@ -305,8 +320,8 @@ export function TableSelectModal({
                   {tempSelectedTable.status === "empty"
                     ? "Meja kosong dan siap digunakan untuk pesanan Dine-in baru."
                     : tempSelectedTable.status === "occupied"
-                    ? "Meja terisi. Pesanan baru akan dibuat sebagai Pesanan Tambahan pada sesi aktif."
-                    : "Meja menunggu pembayaran. Pilih untuk menambahkan item ke pesanan aktif."}
+                    ? "Meja terisi. Pilih untuk Pesanan Tambahan atau tutup sesi bila tamu sudah selesai."
+                    : "Meja menunggu pembayaran. Pilih untuk menambahkan item atau periksa status sesi."}
                 </span>
               </div>
             ) : (
@@ -317,7 +332,19 @@ export function TableSelectModal({
             )}
           </div>
 
-          <div className="flex items-center justify-end gap-3 shrink-0 w-full sm:w-auto">
+          <div className="flex flex-wrap items-center justify-end gap-2.5 shrink-0 w-full sm:w-auto">
+            {tempSelectedTable && tempSelectedTable.status !== "empty" && (
+              <Button
+                type="button"
+                variant="outline"
+                size="default"
+                onClick={() => setSessionInspectTable(tempSelectedTable)}
+                className="h-10 px-4 text-xs font-semibold rounded-xl border-emerald-500/50 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10 gap-1.5 flex-1 sm:flex-none cursor-pointer"
+              >
+                <DoorOpen className="size-3.5 shrink-0" />
+                Tutup Sesi Meja
+              </Button>
+            )}
             <Button
               type="button"
               variant="outline"
@@ -351,5 +378,13 @@ export function TableSelectModal({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+    <TableSessionDialog
+      table={sessionInspectTable}
+      zones={zones}
+      onClose={() => setSessionInspectTable(null)}
+      onSessionClosed={handleSessionClosed}
+    />
+    </>
   );
 }

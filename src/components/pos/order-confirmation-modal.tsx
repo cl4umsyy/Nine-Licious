@@ -500,7 +500,7 @@ export function OrderConfirmationModal({
                 ) : (
                   <div className="space-y-2.5">
                     <p className="text-[11px] text-muted-foreground leading-relaxed">
-                      Pesanan telah difinalisasi. Siap untuk diproses pembayaran melalui Tunai, Midtrans Snap QRIS / VA, QRIS manual, atau Split Bill.
+                      Pesanan telah difinalisasi. Siap untuk diproses pembayaran melalui Tunai, Midtrans Snap, atau Split Bill.
                     </p>
                     <Button
                       type="button"

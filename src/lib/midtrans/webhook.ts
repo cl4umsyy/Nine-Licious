@@ -2,15 +2,14 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 import { getMidtransConfig } from "./config";
-import { verifyMidtransSignature } from "./signature";
+import { verifyMidtransWebhookSignature } from "./signature";
 import type { ProcessWebhookResult } from "./types";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
-export type MidtransWebhookPayload = {
+export type MidtransStatusSettlementPayload = {
   order_id: string;
   status_code: string;
   gross_amount: string;
-  signature_key: string;
   transaction_id?: string;
   transaction_status: string;
   payment_type?: string;
@@ -20,6 +19,12 @@ export type MidtransWebhookPayload = {
   currency?: string;
   [key: string]: unknown;
 };
+
+export type MidtransWebhookPayload = MidtransStatusSettlementPayload & {
+  signature_key?: string;
+};
+
+type VerificationSource = "webhook_signature" | "midtrans_status_api";
 
 /**
  * Menghitung event fingerprint SHA-256 yang identik dengan v_event_fingerprint di migration SQL F2.2:
@@ -47,33 +52,22 @@ export function computeMidtransEventFingerprint(payload: {
 }
 
 /**
- * Handles incoming Midtrans notification webhooks.
- *
- * Enforces:
- * 1. Cryptographic SHA-512 signature verification.
- * 2. SHA-256 event fingerprinting and durable recording.
- * 3. Idempotent deduplication (duplicate notifications do not trigger double settlement).
- * 4. Privilege boundary via Supabase Admin Client (service_role only).
- * 5. Sanitized error handling without leaking secrets or sensitive PII.
+ * Internal executor for ALREADY-VERIFIED Midtrans payloads.
+ * MUST ONLY be called by:
+ * - `processMidtransWebhook()` AFTER cryptographic SHA-512 signature verification succeeds.
+ * - `settleVerifiedMidtransStatus()` AFTER direct HTTPS Basic Auth GET /v2/{order_id}/status
+ *   verification succeeds inside `reconcileActiveMidtransPayment()`.
  */
-export async function processMidtransWebhook(
+async function executeVerifiedMidtransSettlement(
   payload: MidtransWebhookPayload,
+  options: {
+    verificationSource: VerificationSource;
+    isSignatureVerified: boolean;
+  },
 ): Promise<ProcessWebhookResult> {
-  const config = getMidtransConfig();
-
-  if (!config) {
-    return {
-      ok: false,
-      fingerprint: "",
-      processingResult: "failed",
-      error: "Konfigurasi Midtrans tidak aktif di server.",
-    };
-  }
-
   const orderId = payload.order_id;
   const statusCode = payload.status_code;
   const grossAmount = payload.gross_amount;
-  const signatureKey = payload.signature_key;
   const transactionId = payload.transaction_id ?? "";
   const transactionStatus = payload.transaction_status;
 
@@ -82,11 +76,10 @@ export async function processMidtransWebhook(
       ok: false,
       fingerprint: "",
       processingResult: "failed",
-      error: "Payload webhook Midtrans tidak lengkap.",
+      error: "Payload notifikasi Midtrans tidak lengkap.",
     };
   }
 
-  // 1. Hitung fingerprint unik event yang selaras dengan SQL F2.2
   const fingerprint = computeMidtransEventFingerprint({
     order_id: orderId,
     status_code: statusCode,
@@ -97,17 +90,7 @@ export async function processMidtransWebhook(
     transaction_id: transactionId,
   });
 
-  // 2. Verifikasi tanda tangan digital
-  const isSignatureValid = verifyMidtransSignature({
-    orderId,
-    statusCode,
-    grossAmount,
-    signatureKey,
-    serverKey: config.serverKey,
-  });
-
   const adminClient = createSupabaseAdminClient();
-
   if (!adminClient) {
     return {
       ok: false,
@@ -117,39 +100,17 @@ export async function processMidtransWebhook(
     };
   }
 
-  // Sanitasi payload (hilangkan informasi sensitif jika ada)
-  const sanitizedPayload = Object.fromEntries(
+  // Sanitasi payload sebelum diteruskan ke RPC agar signature_key tidak tersimpan di DB
+  const sanitizedPayloadForRpc = Object.fromEntries(
     Object.entries(payload).filter(([k]) => k !== "signature_key"),
   );
 
-  // 3. Simpan event durable ke DB jika signature invalid
-  if (!isSignatureValid) {
-    await adminClient.from("midtrans_webhook_events").insert({
-      event_fingerprint: fingerprint,
-      midtrans_order_id: orderId,
-      transaction_id: transactionId || null,
-      raw_status: transactionStatus,
-      processing_result: "failed",
-      is_signature_verified: false,
-      error_message: "INVALID_SIGNATURE: Signature SHA-512 tidak cocok dengan server key.",
-      sanitized_payload: sanitizedPayload,
-    });
-
-    return {
-      ok: false,
-      fingerprint,
-      orderId,
-      processingResult: "failed",
-      error: "Tanda tangan digital webhook tidak valid.",
-    };
-  }
-
-  // 4. Eksekusi settlement di database via service_role RPC (atomik di dalam PostgreSQL)
+  // Eksekusi settlement di database via service_role RPC (atomik & idempoten di PostgreSQL)
   try {
     const { data: settlementResult, error: settlementError } = await adminClient.rpc(
       "execute_midtrans_webhook_settlement",
       {
-        p_payload: payload,
+        p_payload: sanitizedPayloadForRpc,
       },
     );
 
@@ -173,17 +134,27 @@ export async function processMidtransWebhook(
     }
 
     const status = settlementResult?.status as string | undefined;
+    const eventFp =
+      (settlementResult?.event_fingerprint as string | undefined) || fingerprint;
+
+    // Tandai is_signature_verified = true jika sumber verifikasi adalah signature webhook valid
+    if (options.isSignatureVerified) {
+      await adminClient
+        .from("midtrans_webhook_events")
+        .update({ is_signature_verified: true })
+        .eq("event_fingerprint", eventFp);
+    }
 
     // 1. Tangani status failed eksplisit dari RPC (validasi mata uang, nominal, pesanan, dsb.)
     if (status === "failed") {
       const errorMsg =
         (settlementResult?.message as string | undefined) ||
         (settlementResult?.error as string | undefined) ||
-        "Validasi webhook gagal di database.";
+        "Validasi pembayaran Midtrans gagal di database.";
 
       return {
         ok: false,
-        fingerprint,
+        fingerprint: eventFp,
         orderId,
         midtransOrderId: orderId,
         transactionStatus,
@@ -194,11 +165,6 @@ export async function processMidtransWebhook(
 
     // 2. Tangani duplikasi event / transaksi sudah settled
     if (status === "already_settled" || status === "ignored_duplicate") {
-      const eventFp =
-        (settlementResult?.event_fingerprint as string | undefined) ||
-        fingerprint;
-
-      // Periksa status rekaman event sebelumnya di database
       const { data: prevEvent } = await adminClient
         .from("midtrans_webhook_events")
         .select("processing_result, error_message")
@@ -207,7 +173,6 @@ export async function processMidtransWebhook(
 
       const prevResult = prevEvent?.processing_result;
 
-      // Event failed akibat kegagalan sebelumnya DILARANG otomatis dianggap sukses sebagai duplikat!
       if (prevResult === "failed") {
         return {
           ok: false,
@@ -223,7 +188,6 @@ export async function processMidtransWebhook(
         };
       }
 
-      // Jika sebelumnya ditandai rekonsiliasi manual, pertahankan status rekonsiliasi
       if (prevResult === "reconciliation_flagged") {
         return {
           ok: true,
@@ -236,7 +200,6 @@ export async function processMidtransWebhook(
         };
       }
 
-      // Jika sebelumnya processing (misal sedang dievaluasi fraud challenge)
       if (prevResult === "processing") {
         return {
           ok: true,
@@ -249,7 +212,6 @@ export async function processMidtransWebhook(
         };
       }
 
-      // Jika sebelumnya settled atau terminal_released: duplikat aman diabaikan
       return {
         ok: true,
         fingerprint: eventFp,
@@ -268,7 +230,7 @@ export async function processMidtransWebhook(
     ) {
       return {
         ok: true,
-        fingerprint,
+        fingerprint: eventFp,
         orderId,
         midtransOrderId: orderId,
         transactionStatus,
@@ -290,7 +252,7 @@ export async function processMidtransWebhook(
     ) {
       return {
         ok: true,
-        fingerprint,
+        fingerprint: eventFp,
         orderId,
         midtransOrderId: orderId,
         transactionStatus,
@@ -302,7 +264,7 @@ export async function processMidtransWebhook(
     if (status === "already_terminal") {
       return {
         ok: true,
-        fingerprint,
+        fingerprint: eventFp,
         orderId,
         midtransOrderId: orderId,
         transactionStatus,
@@ -314,7 +276,7 @@ export async function processMidtransWebhook(
     if (status === "capture_challenge") {
       return {
         ok: true,
-        fingerprint,
+        fingerprint: eventFp,
         orderId,
         midtransOrderId: orderId,
         transactionStatus,
@@ -330,14 +292,14 @@ export async function processMidtransWebhook(
         lifecycleStatus === "settlement" || lifecycleStatus === "capture"
           ? "settled"
           : lifecycleStatus === "expire" ||
-            lifecycleStatus === "cancel" ||
-            lifecycleStatus === "deny"
-          ? "terminal_released"
-          : "processing";
+              lifecycleStatus === "cancel" ||
+              lifecycleStatus === "deny"
+            ? "terminal_released"
+            : "processing";
 
       return {
         ok: true,
-        fingerprint,
+        fingerprint: eventFp,
         orderId,
         midtransOrderId: orderId,
         transactionStatus,
@@ -355,17 +317,18 @@ export async function processMidtransWebhook(
         error_message: `UNKNOWN_RPC_STATUS: Status respons RPC tidak dikenal (${unhandledStatus})`,
         processed_at: new Date().toISOString(),
       })
-      .eq("event_fingerprint", fingerprint);
+      .eq("event_fingerprint", eventFp);
 
     return {
       ok: false,
-      fingerprint,
+      fingerprint: eventFp,
       orderId,
       processingResult: "failed",
       error: `Status respons RPC tidak dikenal: ${unhandledStatus}`,
     };
   } catch (err: unknown) {
-    const errorMessage = err instanceof Error ? err.message : "Unknown error during settlement";
+    const errorMessage =
+      err instanceof Error ? err.message : "Unknown error during settlement";
 
     await adminClient
       .from("midtrans_webhook_events")
@@ -384,4 +347,120 @@ export async function processMidtransWebhook(
       error: errorMessage,
     };
   }
+}
+
+/**
+ * Handles incoming external Midtrans HTTP notification webhooks.
+ *
+ * Enforces:
+ * 1. Strict cryptographic SHA-512 signature verification:
+ *    SHA512(order_id + status_code + gross_amount + ServerKey).
+ * 2. Durable logging of invalid-signature attempts without blocking future valid events.
+ * 3. SHA-256 event fingerprinting and idempotent deduplication.
+ * 4. Atomic PostgreSQL settlement via service_role RPC.
+ */
+export async function processMidtransWebhook(
+  payload: MidtransWebhookPayload,
+): Promise<ProcessWebhookResult> {
+  const config = getMidtransConfig();
+
+  if (!config) {
+    return {
+      ok: false,
+      fingerprint: "",
+      processingResult: "failed",
+      error: "Konfigurasi Midtrans tidak aktif di server.",
+    };
+  }
+
+  const orderId = payload.order_id;
+  const statusCode = payload.status_code;
+  const grossAmount = payload.gross_amount;
+  const signatureKey = payload.signature_key ?? "";
+  const transactionId = payload.transaction_id ?? "";
+  const transactionStatus = payload.transaction_status;
+
+  if (!orderId || !statusCode || !grossAmount || !transactionStatus) {
+    return {
+      ok: false,
+      fingerprint: "",
+      processingResult: "failed",
+      error: "Payload webhook Midtrans tidak lengkap.",
+    };
+  }
+
+  const fingerprint = computeMidtransEventFingerprint({
+    order_id: orderId,
+    status_code: statusCode,
+    gross_amount: grossAmount,
+    currency: (payload.currency as string | undefined) || "IDR",
+    transaction_status: transactionStatus,
+    fraud_status: (payload.fraud_status as string | undefined) || "",
+    transaction_id: transactionId,
+  });
+
+  // Verifikasi tanda tangan digital SHA-512 wajib untuk seluruh HTTP webhook eksternal
+  const isSignatureValid = verifyMidtransWebhookSignature({
+    orderId,
+    statusCode,
+    grossAmount,
+    signatureKey,
+    serverKey: config.serverKey,
+    additionalSignatureKey: process.env.MIDTRANS_SIGNATURE_KEY,
+  });
+
+  if (!isSignatureValid) {
+    const adminClient = createSupabaseAdminClient();
+    if (adminClient) {
+      const sanitizedPayload = Object.fromEntries(
+        Object.entries(payload).filter(([k]) => k !== "signature_key"),
+      );
+
+      // Gunakan suffix unik pada event invalid signature agar tidak membentur
+      // event_fingerprint resmi jika notifikasi valid / rekonsiliasi datang setelahnya
+      await adminClient.from("midtrans_webhook_events").insert({
+        event_fingerprint: `${fingerprint}:invalid_sig_${Date.now()}`,
+        midtrans_order_id: orderId,
+        transaction_id: transactionId || null,
+        raw_status: transactionStatus,
+        processing_result: "failed",
+        is_signature_verified: false,
+        error_message:
+          "INVALID_SIGNATURE: Signature SHA-512 tidak cocok dengan server key.",
+        sanitized_payload: sanitizedPayload,
+      });
+    }
+
+    return {
+      ok: false,
+      fingerprint,
+      orderId,
+      processingResult: "failed",
+      error: "Tanda tangan digital webhook tidak valid.",
+    };
+  }
+
+  return executeVerifiedMidtransSettlement(payload, {
+    verificationSource: "webhook_signature",
+    isSignatureVerified: true,
+  });
+}
+
+/**
+ * Executes atomic idempotent settlement for a Midtrans status response fetched
+ * directly server-to-server from `GET ${config.apiBaseUrl}/v2/{order_id}/status`
+ * using HTTP Basic Auth with `config.serverKey`.
+ *
+ * Security boundary:
+ * - Server-only module (`import "server-only"`), NEVER exposed to browser or HTTP webhook route.
+ * - Must ONLY be invoked by `reconcileActiveMidtransPayment()` after validating
+ *   `order_id`, exact `gross_amount`, `currency === 'IDR'`, and `transaction_status`.
+ */
+export async function settleVerifiedMidtransStatus(
+  payload: MidtransStatusSettlementPayload,
+): Promise<ProcessWebhookResult> {
+  return executeVerifiedMidtransSettlement(payload, {
+    verificationSource: "midtrans_status_api",
+    isSignatureVerified: false,
+  });
 }

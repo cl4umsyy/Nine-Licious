@@ -1,6 +1,6 @@
 import "server-only";
 
-import { getMidtransConfig } from "./config";
+import { getMidtransConfigState } from "./config";
 import type {
   CreateSnapTransactionParams,
   CreateSnapTransactionResult,
@@ -23,14 +23,24 @@ const DEFAULT_EXPIRY_MINUTES = 15;
 export async function createSnapPayment(
   params: CreateSnapTransactionParams,
 ): Promise<CreateSnapTransactionResult> {
-  const config = getMidtransConfig();
+  const configState = getMidtransConfigState();
 
-  if (!config) {
+  if (!configState.enabled) {
     return {
       ok: false,
-      error: "Integrasi Midtrans tidak aktif atau konfigurasi tidak lengkap.",
+      error: "Integrasi Midtrans tidak aktif pada konfigurasi server restoran.",
     };
   }
+
+  if (!configState.ok) {
+    console.error("[midtrans-service] Konfigurasi Midtrans tidak valid:", configState.error);
+    return {
+      ok: false,
+      error: configState.error,
+    };
+  }
+
+  const config = configState.config;
 
   const supabase = await createSupabaseServerClient();
 
@@ -102,19 +112,38 @@ export async function createSnapPayment(
   };
 
   try {
-    const snapResponse = await fetch(`${config.apiBaseUrl}/snap/v1/transactions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        Authorization: authHeader,
-      },
-      body: JSON.stringify(snapPayload),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
 
-    const responseBody = await snapResponse.json();
+    let snapResponse: Response;
+    try {
+      snapResponse = await fetch(`${config.apiBaseUrl}/snap/v1/transactions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          Authorization: authHeader,
+        },
+        body: JSON.stringify(snapPayload),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
 
-    if (!snapResponse.ok || !responseBody.token) {
+    let responseBody: {
+      token?: string;
+      redirect_url?: string;
+      error_messages?: string[];
+      status_message?: string;
+    } | null = null;
+    try {
+      responseBody = await snapResponse.json();
+    } catch {
+      responseBody = null;
+    }
+
+    if (!snapResponse.ok || !responseBody?.token) {
       // Tandai kegagalan di DB tanpa menghilangkan reservasi jika status in-flight
       const adminClient = createSupabaseAdminClient();
       if (adminClient) {
@@ -133,9 +162,22 @@ export async function createSnapPayment(
           .eq("midtrans_transaction_id", txId);
       }
 
+      let errorMessage = "Gagal membuat transaksi di Midtrans API.";
+      if (snapResponse.status === 401) {
+        errorMessage = "Autentikasi Midtrans gagal. Server Key ditolak oleh Midtrans API.";
+      } else if (responseBody?.error_messages && Array.isArray(responseBody.error_messages)) {
+        errorMessage = `Midtrans API error: ${responseBody.error_messages.join(", ")}`;
+      } else if (responseBody?.status_message) {
+        errorMessage = `Midtrans API error: ${responseBody.status_message}`;
+      } else if (snapResponse.status >= 500) {
+        errorMessage = `Layanan Midtrans Snap sedang mengalami gangguan (HTTP ${snapResponse.status}). Coba beberapa saat lagi.`;
+      }
+
+      console.error("[midtrans-service] Snap API response error:", snapResponse.status, errorMessage);
+
       return {
         ok: false,
-        error: responseBody?.error_messages?.[0] ?? "Gagal mendapatkan token transaksi dari Midtrans.",
+        error: errorMessage,
       };
     }
 
@@ -158,6 +200,13 @@ export async function createSnapPayment(
       grossAmount,
     };
   } catch (networkError: unknown) {
+    const isTimeout = networkError instanceof Error && networkError.name === "AbortError";
+    const errorMsg = isTimeout
+      ? "Koneksi ke Midtrans Snap API mengalami batas waktu (timeout 10 detik). Periksa jaringan internet."
+      : "Koneksi ke Midtrans mengalami gangguan. Transaksi masuk ke tahap rekonsiliasi.";
+
+    console.error("[midtrans-service] Network error saat createSnapPayment:", errorMsg);
+
     // Network timeout: status harus menjadi reconciliation_required
     const adminClient = createSupabaseAdminClient();
     if (adminClient) {
@@ -165,14 +214,16 @@ export async function createSnapPayment(
         .from("midtrans_transactions")
         .update({
           lifecycle_status: "reconciliation_required",
-          sanitized_response: { error: networkError instanceof Error ? networkError.message : "Network error" },
+          sanitized_response: {
+            error: isTimeout ? "Request timeout" : networkError instanceof Error ? networkError.message : "Network error",
+          },
         })
         .eq("id", txId);
     }
 
     return {
       ok: false,
-      error: "Koneksi ke Midtrans mengalami gangguan. Transaksi masuk ke tahap rekonsiliasi.",
+      error: errorMsg,
     };
   }
 }

@@ -3,10 +3,10 @@
 | Field | Nilai |
 | --- | --- |
 | Produk | Nine Licious POS |
-| Versi dokumen | 1.2 |
-| Tanggal | 11 November 2026 |
-| Status | Dokumentasi alur; implementasi bertahap F0–F6 |
-| Sumber utama | [`docs/PRD.md`](./PRD.md) versi 1.5 dan [`docs/ROADMAP.md`](./ROADMAP.md) versi 1.5 |
+| Versi dokumen | 1.4 |
+| Tanggal | 18 November 2026 |
+| Status | F0–F2.4, F3 KDS (`/kitchen`), dan Konfirmasi Penyajian POS (`/pos`) aktif (`/queue` belum diaktifkan) |
+| Sumber utama | [`docs/PRD.md`](./PRD.md) versi 1.7 dan [`docs/ROADMAP.md`](./ROADMAP.md) versi 1.7 |
 | Dokumen terkait | [`README.md`](../README.md) |
 
 > Dokumen ini menjelaskan **alur penggunaan** dari sudut pandang pelanggan dan
@@ -1361,3 +1361,5 @@ flowchart LR
 | 1.0 | 11 November 2026 | Dokumen alur awal: customer, cashier, kitchen, admin, order, payment, table, queue, refund/cancellation, additional order, dan authentication/authorization; status F0–F6 dan diagram Mermaid |
 | 1.1 | 11 November 2026 | Audit konsistensi pra-F1: perbaiki refund setelah lunas/Selesai, pencatatan tunai split bill, transisi meja saat pembatalan, arti override tutup meja, fase notifikasi refund, dan status pembayaran |
 | 1.2 | 11 November 2026 | Selaraskan dengan PRD/ROADMAP 1.5: status F1.1–F1.4, pembatalan pesanan belum lunas (role, alasan, audit, dampak meja), handoff POS ke pembayaran F2, tiga status meja (render F1.2, transisi Terisi F2), dan larangan KDS/antrean pada F1 |
+| 1.3 | 18 November 2026 | Catat pengaktifan F3 KDS (`/kitchen`) untuk role `kitchen` & `admin`: 3 status (`queued`/`preparing`/`ready`), isolasi privasi non-finansial/non-PII, Realtime + polling, deteksi pesanan tambahan, dan notifikasi penghentian tiket refund penuh; `/queue` belum diaktifkan pada tahap ini |
+| 1.4 | 18 November 2026 | Tambah alur Konfirmasi Pesanan Sudah Disajikan di `/pos` untuk role `admin` & `kasir`: pesanan berstatus `ready` tampil pada bagian "Menunggu Disajikan", kasir/admin mengonfirmasi lewat dialog untuk mencatat `served_at` & `served_by` + audit `order.served_confirmed` tanpa mengubah pembayaran, tanpa menutup dining session, dan tanpa mengubah status meja (penutupan sesi meja tetap melalui F2.3) |

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getMidtransConfig } from "@/lib/midtrans/config";
-import { verifyMidtransSignature } from "@/lib/midtrans/signature";
+import { verifyMidtransWebhookSignature } from "@/lib/midtrans/signature";
 import {
   processMidtransWebhook,
   type MidtransWebhookPayload,
@@ -69,12 +69,13 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   // 4. Verifikasi digital signature SHA-512 dengan Server Key resmi sebelum memanggil domain handler
-  const isSignatureValid = verifyMidtransSignature({
+  const isSignatureValid = verifyMidtransWebhookSignature({
     orderId,
     statusCode,
     grossAmount,
     signatureKey,
     serverKey: config.serverKey,
+    additionalSignatureKey: process.env.MIDTRANS_SIGNATURE_KEY,
   });
 
   if (!isSignatureValid) {

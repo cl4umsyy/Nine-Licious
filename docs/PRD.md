@@ -3,9 +3,9 @@
 | Field | Nilai |
 | --- | --- |
 | Produk | Nine Licious POS |
-| Versi dokumen | 1.5 |
-| Tanggal | 11 November 2026 |
-| Status | Draft untuk persetujuan; implementasi menunggu persetujuan |
+| Versi dokumen | 1.7 |
+| Tanggal | 18 November 2026 |
+| Status | F0–F2.4, F3 KDS (`/kitchen`), dan Konfirmasi Penyajian Pesanan di POS (`/pos`) selesai diimplementasikan (papan antrean `/queue` ditunda ke tahap berikutnya) |
 | Pemilik produk | Pemilik Nine Licious |
 | Dokumen terkait | [`README.md`](../README.md), [`docs/ROADMAP.md`](./ROADMAP.md) |
 
@@ -1578,3 +1578,5 @@ setelah F1.1–F1.4 lulus acceptance dan gate masing-masing.
 | 1.3 | 11 November 2026 | Tetapkan split bill Midtrans per transaksi gateway dengan callback idempoten dan total pembayaran tidak boleh melebihi tagihan; tiga jenis diskon dengan approval admin, larangan kasir mengubah harga, pencatatan transaksi/audit, dan pajak/service setelah diskon; browser print 58/80 mm pada F2 tanpa kewajiban ESC/POS |
 | 1.4 | 11 November 2026 | Audit konsistensi pra-F1: tegaskan status pesanan **Selesai → Refund**, lima status pembayaran, refund penuh setelah lunas/Selesai, penghentian antrean dan tiket KDS, transisi meja saat pembatalan, arti override tutup meja, pencatatan tunai split bill, serta klarifikasi konfirmasi pengambilan dan metode kartu |
 | 1.5 | 11 November 2026 | Pecah F1 menjadi F1.1 Menu & Master Data, F1.2 Meja & Denah, F1.3 POS Core/Kunjungan/Pesanan, dan F1.4 Diskon & Finalisasi; tambah FR-POS-11 pembatalan pesanan belum lunas (role, alasan, audit, dampak meja) dan FR-POS-12 handoff ke pembayaran F2; tegaskan F1.2 merender tiga status meja dan transisi **Terisi** diuji di F2; tegaskan F1 tidak menghasilkan tiket KDS/nomor antrean; pecah migration F1 |
+| 1.6 | 18 November 2026 | Catat penyelesaian implementasi F3 Kitchen Display System (`/kitchen`) tanpa migrasi SQL tambahan: 3 status (`queued`/`preparing`/`ready`), isolasi data finansial & PII (FR-KDS-03), RBAC `admin`/`kitchen`, Realtime + fallback polling, badge pesanan tambahan, dan notifikasi penghentian tiket refund penuh; papan antrean publik (`/queue`) ditunda ke sub-tahap berikutnya |
+| 1.7 | 18 November 2026 | Tambah fitur Konfirmasi Pesanan Sudah Disajikan di POS (`/pos`): bagian "Menunggu Disajikan" Realtime + fallback polling, dialog konfirmasi, pencatatan `orders.served_at` & `orders.served_by` via RPC atomik `confirm_order_served_atomic` (migrasi `20261118000100_order_serving_confirmation.sql`), audit `order.served_confirmed`, terpisah penuh dari `complete_pos_order` dan penutupan sesi meja F2.3, tanpa menambah status KDS keempat |

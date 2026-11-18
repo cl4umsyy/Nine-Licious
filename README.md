@@ -4,21 +4,16 @@ Aplikasi point of sale restoran **Nine Licious** — pesanan, pembayaran, dapur,
 shift, laporan, dan audit dalam satu sistem. Antarmuka sepenuhnya berbahasa
 Indonesia, mode terang, dengan identitas visual teal tua dan terracotta.
 
-Status saat ini: **F0 — Fondasi & Autentikasi selesai**. F1 — Menu, meja, dan POS
-dipecah menjadi **F1.1 Menu & Master Data**, **F1.2 Meja & Denah**, **F1.3 POS
-Core, Kunjungan & Pesanan**, dan **F1.4 Diskon & Finalisasi**. Implementasi kode
-F1.1 sudah tersedia dan menunggu migration serta pengujian runtime. Modul
-pembayaran, dapur, stok, shift, dan laporan dikerjakan setelahnya sesuai
-roadmap.
+Status saat ini: **F0–F2.4 selesai**, **F3 Kitchen Display System (`/kitchen`)**, dan **Konfirmasi Penyajian Pesanan (`/pos`) selesai diimplementasikan** (papan antrean publik `/queue` ditunda ke sub-tahap berikutnya). Modul KDS mendukung 3 status (`Pesanan Masuk`, `Sedang Disiapkan`, `Siap Diambil`), Realtime + fallback polling, filter stasiun & tipe pesanan, penanda pesanan tambahan, notifikasi refund penuh, serta isolasi penuh dari data finansial dan PII pelanggan. Halaman POS kini menyediakan bagian **Menunggu Disajikan** bagi kasir/admin untuk mengonfirmasi penyajian (`served_at` & `served_by` via migrasi `supabase/migrations/20261118000100_order_serving_confirmation.sql`) secara terpisah dari penyelesaian transaksi dan penutupan sesi meja F2.3. Modul stok (F4), shift (F5), dan laporan (F6) dikerjakan setelahnya sesuai roadmap.
 
 Dokumen acuan:
 
 - [`docs/PRD.md`](docs/PRD.md) — **satu-satunya PRD utama**: requirement produk
-  lengkap dan analisis database. Versi dokumen 1.5.
+  lengkap dan analisis database. Versi dokumen 1.7.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — fase F0–F6, milestone F1.1–F1.4,
-  dependency, migration, dan acceptance criteria. Versi dokumen 1.5.
+  dependency, migration, dan acceptance criteria. Versi dokumen 1.7.
 - [`docs/USER_FLOW.md`](docs/USER_FLOW.md) — alur penggunaan per role dan proses
-  bisnis, status F0–F6, serta diagram Mermaid. Versi dokumen 1.2.
+  bisnis, status F0–F6, serta diagram Mermaid. Versi dokumen 1.4.
 
 > Jangan membuat `prd.md` di root project atau salinan PRD dengan nama lain.
 > Setiap keputusan produk harus masuk ke `docs/PRD.md`, lalu disinkronkan ke

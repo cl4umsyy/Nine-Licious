@@ -52,23 +52,23 @@ export function ProductCatalog({
   }, [products, selectedCategoryId, searchQuery]);
 
   return (
-    <div className="flex flex-col h-full min-h-0 space-y-3">
+    <div className="flex flex-col h-full min-h-0 space-y-4">
       {/* Search Bar & Category Filter Bar */}
-      <div className="space-y-2.5 shrink-0">
+      <div className="space-y-3 shrink-0">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
           <Input
             type="search"
             placeholder="Cari produk menu atau SKU..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9 pr-9 h-10 text-sm bg-card"
+            className="pl-10 pr-10 h-10.5 text-sm bg-card rounded-xl border-border/80 shadow-2xs"
           />
           {searchQuery && (
             <button
               type="button"
               onClick={() => setSearchQuery("")}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
+              className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground rounded-md"
               aria-label="Bersihkan pencarian"
             >
               <X className="size-4" />
@@ -77,16 +77,16 @@ export function ProductCatalog({
         </div>
 
         {/* Category Pills */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
           <Button
             type="button"
             variant={selectedCategoryId === null ? "default" : "outline"}
             size="sm"
             onClick={() => setSelectedCategoryId(null)}
-            className={`h-8 text-xs shrink-0 rounded-full font-medium ${
+            className={`h-8.5 px-3.5 text-xs shrink-0 rounded-full font-semibold transition-all ${
               selectedCategoryId === null
-                ? "bg-primary text-primary-foreground shadow-sm"
-                : "bg-card hover:bg-muted/60"
+                ? "bg-primary text-primary-foreground shadow-xs"
+                : "bg-card border-border/80 hover:bg-muted/60"
             }`}
           >
             Semua ({products.filter((p) => p.is_active).length})
@@ -105,10 +105,10 @@ export function ProductCatalog({
                 variant={isSelected ? "default" : "outline"}
                 size="sm"
                 onClick={() => setSelectedCategoryId(cat.id)}
-                className={`h-8 text-xs shrink-0 rounded-full font-medium ${
+                className={`h-8.5 px-3.5 text-xs shrink-0 rounded-full font-semibold transition-all ${
                   isSelected
-                    ? "bg-primary text-primary-foreground shadow-sm"
-                    : "bg-card hover:bg-muted/60"
+                    ? "bg-primary text-primary-foreground shadow-xs"
+                    : "bg-card border-border/80 hover:bg-muted/60"
                 }`}
               >
                 {cat.name} ({count})
@@ -119,7 +119,7 @@ export function ProductCatalog({
       </div>
 
       {/* Product Grid */}
-      <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1.5 pb-2">
         {filteredProducts.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-12 text-center rounded-2xl border border-dashed bg-card/40 text-muted-foreground space-y-2 mt-4">
             <Utensils className="size-8 text-muted-foreground/60" />
@@ -142,7 +142,7 @@ export function ProductCatalog({
             )}
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {filteredProducts.map((product) => {
               const isAvailable = product.is_available;
               const hasModifiers = product.modifierGroups.length > 0;
@@ -153,20 +153,20 @@ export function ProductCatalog({
                   type="button"
                   disabled={!isAvailable}
                   onClick={() => onSelectProduct(product)}
-                  className={`group relative flex flex-col overflow-hidden rounded-2xl border text-left bg-card transition-all ${
+                  className={`group relative flex flex-col overflow-hidden rounded-2xl border border-border/75 text-left bg-card shadow-2xs transition-all ${
                     isAvailable
-                      ? "hover:border-primary/50 hover:shadow-md cursor-pointer active:scale-[0.98]"
+                      ? "hover:border-primary/50 hover:shadow-md cursor-pointer active:scale-[0.985]"
                       : "opacity-60 cursor-not-allowed bg-muted/40"
                   }`}
                 >
                   {/* Photo Container */}
-                  <div className="relative aspect-4/3 w-full overflow-hidden bg-muted">
+                  <div className="relative aspect-4/3 w-full overflow-hidden bg-muted shrink-0">
                     {product.photo_url ? (
                       <Image
                         src={product.photo_url}
                         alt={product.name}
                         fill
-                        sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
+                        sizes="(max-width: 640px) 50vw, (max-width: 1280px) 33vw, 25vw"
                         className="object-cover transition-transform duration-300 group-hover:scale-105"
                       />
                     ) : (
@@ -189,12 +189,12 @@ export function ProductCatalog({
 
                     {/* Modifier Indicator Badge */}
                     {hasModifiers && isAvailable && (
-                      <div className="absolute top-2 right-2">
+                      <div className="absolute top-2.5 right-2.5">
                         <Badge
                           variant="secondary"
-                          className="text-[9px] px-1.5 py-0 h-4 bg-background/90 backdrop-blur border text-foreground flex items-center gap-1 shadow-sm"
+                          className="text-[10px] px-2 py-0.5 h-5 bg-background/95 backdrop-blur border text-foreground flex items-center gap-1 shadow-xs"
                         >
-                          <Sparkles className="size-2 text-primary" />
+                          <Sparkles className="size-2.5 text-primary" />
                           Custom
                         </Badge>
                       </div>
@@ -202,23 +202,25 @@ export function ProductCatalog({
                   </div>
 
                   {/* Details */}
-                  <div className="flex flex-col flex-1 p-3 space-y-1">
+                  <div className="flex flex-col flex-1 w-full p-3.5 gap-1.5">
                     <h3 className="font-display font-bold text-sm leading-snug line-clamp-2 text-foreground group-hover:text-primary transition-colors">
                       {product.name}
                     </h3>
 
-                    {product.description && (
-                      <p className="text-[11px] text-muted-foreground line-clamp-1">
+                    {product.description ? (
+                      <p className="text-[11px] leading-relaxed text-muted-foreground line-clamp-1">
                         {product.description}
                       </p>
+                    ) : (
+                      <div className="h-4" aria-hidden="true" />
                     )}
 
-                    <div className="mt-auto pt-1 flex items-center justify-between">
-                      <span className="font-bold text-sm text-primary">
+                    <div className="mt-auto pt-2.5 border-t border-border/40 flex items-baseline justify-between gap-2">
+                      <span className="font-bold text-sm text-primary tracking-tight">
                         {formatRupiah(product.price)}
                       </span>
                       {product.sku && (
-                        <span className="text-[10px] text-muted-foreground font-mono">
+                        <span className="text-[10px] text-muted-foreground font-mono shrink-0">
                           {product.sku}
                         </span>
                       )}

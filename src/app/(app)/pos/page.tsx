@@ -1,12 +1,21 @@
 import Link from "next/link";
-import { AlertCircle, ArrowRight, Database, MapPin } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowRight,
+  ClipboardList,
+  Database,
+  MapPin,
+} from "lucide-react";
 import { PageHeader } from "@/components/page-header";
+import { PendingServingPanel } from "@/components/pos/pending-serving-panel";
 import { PosContainer } from "@/components/pos/pos-container";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { requireRole } from "@/lib/auth/guards";
 import { ROLE_LABELS } from "@/lib/auth/roles";
+import type { PendingServingBoardData } from "@/lib/orders/serving";
+import { getPendingServingOrdersAction } from "@/lib/orders/serving-actions";
 import type {
   ProductModifierGroupWithDetails,
   ProductWithModifiers,
@@ -35,6 +44,12 @@ export default async function PosPage() {
   let taxPercent = 10;
   let serviceChargePercent = 5;
   let loadError: string | null = null;
+  let pendingServingData: PendingServingBoardData = {
+    orders: [],
+    syncedAt: new Date().toISOString(),
+    schemaReady: true,
+    migrationNotice: null,
+  };
 
   if (!supabase) {
     loadError = "Supabase belum dikonfigurasi.";
@@ -50,6 +65,7 @@ export default async function PosPage() {
         zonesRes,
         settingsRes,
         discountsRes,
+        pendingServingRes,
       ] = await Promise.all([
         supabase
           .from("menu_categories")
@@ -100,7 +116,12 @@ export default async function PosPage() {
           .select("*")
           .eq("is_active", true)
           .order("name", { ascending: true }),
+        getPendingServingOrdersAction(),
       ]);
+
+      if (pendingServingRes.ok && pendingServingRes.data) {
+        pendingServingData = pendingServingRes.data;
+      }
 
       if (categoriesRes.error || productsRes.error) {
         loadError =
@@ -179,23 +200,45 @@ export default async function PosPage() {
     <div className="flex flex-col flex-1 min-h-0 space-y-2.5">
       <PageHeader
         title="POS Utama"
-        description="Kelola pesanan Dine-in dan Takeaway, konfigurasi modifier, dan proses pembayaran kasir."
         className="shrink-0 py-0"
         actions={
-          <div className="flex items-center gap-2">
-            <Button asChild variant="outline" size="sm" className="h-8 text-xs">
-              <Link href="/pos/floor">
-                <MapPin className="size-3.5 mr-1 text-primary" />
-                Denah Meja
-                <ArrowRight className="size-3 ml-1" />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              asChild
+              variant="outline"
+              size="sm"
+              className="h-8.5 px-3 text-xs font-semibold rounded-xl"
+            >
+              <Link href="/pos/orders">
+                <ClipboardList className="size-3.5 mr-1.5 text-primary" />
+                Daftar Pesanan
               </Link>
             </Button>
-            <Badge variant="outline" className="h-8 px-3 text-xs font-medium">
+            <Button
+              asChild
+              variant="outline"
+              size="sm"
+              className="h-8.5 px-3 text-xs font-semibold rounded-xl"
+            >
+              <Link href="/pos/floor">
+                <MapPin className="size-3.5 mr-1.5 text-primary" />
+                Denah Meja
+                <ArrowRight className="size-3.5 ml-1.5" />
+              </Link>
+            </Button>
+            <Badge
+              variant="outline"
+              className="h-8.5 px-3 text-xs font-semibold rounded-xl"
+            >
               {ROLE_LABELS[session.profile.role]}
             </Badge>
           </div>
         }
       />
+
+      {!loadError ? (
+        <PendingServingPanel initialData={pendingServingData} />
+      ) : null}
 
       {loadError ? (
         <Alert variant="destructive">

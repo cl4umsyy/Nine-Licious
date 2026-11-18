@@ -9,6 +9,7 @@ import {
 } from "@/lib/auth/session";
 import type { OrderActionResult } from "@/lib/orders/action-types";
 import { calculateCartTotals } from "@/lib/orders/calculations";
+import { evaluateDiningSessionClosure } from "@/lib/orders/session-closure";
 import type {
   CartItem,
   DiningSessionOrderSummary,
@@ -24,6 +25,7 @@ import {
   firstZodError,
   tableIdSchema,
 } from "@/lib/orders/validation";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import type {
   DiningSession,
@@ -1214,7 +1216,9 @@ export async function completePosOrderAction(
 
 /**
  * F2.3: Menutup sesi kunjungan meja secara atomik (close_dining_session_atomic).
- * Menjalankan 7 pintu validasi proteksi sebelum mengubah status sesi 'closed' dan meja 'empty'.
+ * Memastikan seluruh tagihan lunas (termasuk pesanan tambahan, split bill, dan refund),
+ * menyelesaikan pesanan lunas secara otomatis melalui complete_pos_order bila perlu,
+ * lalu menutup sesi ('closed') dan mengembalikan meja ke status 'empty' secara atomik.
  */
 export async function closeDiningSessionAction(
   tableId: string,
@@ -1225,11 +1229,163 @@ export async function closeDiningSessionAction(
 
   const { context } = contextResult;
 
+  if (!["admin", "kasir"].includes(context.actor.profile.role)) {
+    return {
+      ok: false,
+      message: "Hanya admin atau kasir yang berhak menutup sesi meja.",
+    };
+  }
+
   if (!tableId || !sessionId) {
     return { ok: false, message: "ID meja dan sesi kunjungan wajib diisi." };
   }
 
-  // Coba jalankan RPC close_dining_session_atomic
+  // 1. Validasi eksistensi, kecocokan meja, dan status sesi (cegah penutupan ulang)
+  const { data: sessionRow, error: sessionErr } = await context.supabase
+    .from("dining_sessions")
+    .select("id, table_id, status")
+    .eq("id", sessionId)
+    .maybeSingle<Pick<DiningSession, "id" | "table_id" | "status">>();
+
+  if (sessionErr) {
+    return { ok: false, message: "Gagal memverifikasi status sesi kunjungan meja." };
+  }
+
+  if (!sessionRow) {
+    return { ok: false, message: "Sesi kunjungan tidak ditemukan." };
+  }
+
+  if (sessionRow.table_id !== tableId) {
+    return { ok: false, message: "Sesi kunjungan tidak sesuai dengan meja yang dipilih." };
+  }
+
+  if (sessionRow.status !== "open") {
+    return {
+      ok: false,
+      message: "Sesi kunjungan ini sudah ditutup sebelumnya dan tidak dapat ditutup kembali.",
+    };
+  }
+
+  // 2. Ambil ringkasan otoritatif sesi & jalankan seluruh validasi finansial & integritas
+  const summaryRes = await getDiningSessionSummaryAction(tableId);
+  if (!summaryRes.ok || !summaryRes.data) {
+    return {
+      ok: false,
+      message: summaryRes.message || "Gagal memeriksa ringkasan tagihan sesi meja.",
+    };
+  }
+
+  const summary = summaryRes.data;
+  if (!summary.has_active_session || summary.session_id !== sessionId) {
+    return {
+      ok: false,
+      message: "Sesi aktif pada meja ini sudah berubah. Silakan muat ulang detail meja.",
+    };
+  }
+
+  const evaluation = evaluateDiningSessionClosure(summary);
+  if (!evaluation.canClose) {
+    return {
+      ok: false,
+      message: evaluation.blockingReason || "Sesi belum dapat ditutup karena masih ada kewajiban aktif.",
+    };
+  }
+
+  // 3. Selesaikan pesanan yang sudah 100% lunas (status 'paid' -> 'completed')
+  //    agar KDS yang belum aktif tidak menghalangi penutupan sesi setelah pelanggan selesai makan.
+  const autoCompletedOrderNumbers: string[] = [];
+
+  for (const paidOrder of evaluation.paidOrdersToComplete) {
+    const { error: completeErr } = await context.supabase.rpc("complete_pos_order", {
+      p_order_id: paidOrder.id,
+    });
+
+    if (completeErr) {
+      return {
+        ok: false,
+        message:
+          completeErr.message ||
+          `Gagal menyelesaikan pesanan lunas #${paidOrder.order_number} sebelum menutup sesi.`,
+      };
+    }
+
+    autoCompletedOrderNumbers.push(paidOrder.order_number);
+  }
+
+  // Tangani kasus khusus: pesanan lunas dengan refund sebagian (status='paid',
+  // payment_status='partially_refunded', paid_total >= grand_total, pending_refund=0)
+  // serta pesanan 'completed' dengan kds_status sisa yang belum null.
+  if (
+    evaluation.partiallyRefundedPaidOrdersToComplete.length > 0 ||
+    evaluation.completedOrdersWithActiveKds.length > 0
+  ) {
+    const adminClient = createSupabaseAdminClient();
+    if (!adminClient) {
+      return {
+        ok: false,
+        message: "Konfigurasi service_role tidak tersedia untuk menuntaskan pesanan refund sebagian.",
+      };
+    }
+
+    const nowIso = new Date().toISOString();
+
+    for (const partialRefundOrder of evaluation.partiallyRefundedPaidOrdersToComplete) {
+      const { error: updateErr } = await adminClient
+        .from("orders")
+        .update({
+          status: "completed",
+          kds_status: null,
+          updated_at: nowIso,
+        })
+        .eq("id", partialRefundOrder.id)
+        .eq("dining_session_id", sessionId)
+        .eq("status", "paid")
+        .eq("payment_status", "partially_refunded");
+
+      if (updateErr) {
+        return {
+          ok: false,
+          message: `Gagal menuntaskan pesanan #${partialRefundOrder.order_number} sebelum menutup sesi.`,
+        };
+      }
+
+      await logAudit({
+        action: "order.completed",
+        userId: context.actor.user.id,
+        username: context.actor.profile.username,
+        entity: "order",
+        entityId: partialRefundOrder.id,
+        details: {
+          order_number: partialRefundOrder.order_number,
+          dining_session_id: sessionId,
+          reason: "auto_completed_on_session_close_partially_refunded",
+        },
+      });
+
+      autoCompletedOrderNumbers.push(partialRefundOrder.order_number);
+    }
+
+    for (const staleKdsOrder of evaluation.completedOrdersWithActiveKds) {
+      const { error: kdsErr } = await adminClient
+        .from("orders")
+        .update({
+          kds_status: null,
+          updated_at: nowIso,
+        })
+        .eq("id", staleKdsOrder.id)
+        .eq("dining_session_id", sessionId)
+        .eq("status", "completed");
+
+      if (kdsErr) {
+        return {
+          ok: false,
+          message: `Gagal membersihkan status dapur pesanan #${staleKdsOrder.order_number}.`,
+        };
+      }
+    }
+  }
+
+  // 4. Jalankan RPC atomik close_dining_session_atomic
   const { data: rpcData, error: rpcError } = await context.supabase.rpc(
     "close_dining_session_atomic",
     {
@@ -1245,16 +1401,20 @@ export async function closeDiningSessionAction(
       username: context.actor.profile.username,
       entity: "dining_session",
       entityId: sessionId,
-      details: { table_id: tableId, session_id: sessionId },
+      details: {
+        table_id: tableId,
+        table_name: summary.table_name,
+        session_id: sessionId,
+        total_orders: summary.total_orders,
+        auto_completed_orders: autoCompletedOrderNumbers,
+      },
     });
 
-    revalidatePath("/pos");
-    revalidatePath("/pos/floor");
-    revalidatePath("/tables");
+    revalidatePosPaths();
 
     return {
       ok: true,
-      message: "Sesi kunjungan berhasil ditutup. Meja kini berstatus kosong.",
+      message: `Sesi Meja ${summary.table_name} berhasil ditutup. Meja kini berstatus kosong dan siap digunakan.`,
       data: rpcData,
     };
   }
@@ -1429,7 +1589,21 @@ export async function getDiningSessionSummaryAction(
   );
 
   if (!rpcError && rpcData) {
-    return { ok: true, data: rpcData as DiningSessionSummary };
+    const raw = rpcData as DiningSessionSummary;
+    const normalized: DiningSessionSummary = {
+      ...raw,
+      session_status: raw.has_active_session ? "open" : undefined,
+      orders: Array.isArray(raw.orders) ? raw.orders : [],
+    };
+    const evaluation = evaluateDiningSessionClosure(normalized);
+    return {
+      ok: true,
+      data: {
+        ...normalized,
+        can_close_session: evaluation.canClose,
+        blocking_reason: evaluation.blockingReason,
+      },
+    };
   }
 
   // Fallback query jika RPC belum ada
@@ -1512,9 +1686,6 @@ export async function getDiningSessionSummaryAction(
     ).length;
     const uncompletedCount = orders.filter((o) => o.status === "paid").length;
     const completedCount = orders.filter((o) => o.status === "completed").length;
-    const activeKdsCount = orders.filter((o) =>
-      ["queued", "preparing", "ready"].includes(o.kds_status ?? ""),
-    ).length;
 
     const orderIds = orders.map((o) => o.id);
     let reservedAllocCount = 0;
@@ -1573,53 +1744,41 @@ export async function getDiningSessionSummaryAction(
       .reduce((sum, o) => sum + o.paid_total, 0);
     const sessionRemainingBalance = Math.max(0, sessionGrandTotal - sessionPaidTotal);
 
-    let canClose = false;
-    let blockingReason: string | null = null;
+    const fallbackSummary: DiningSessionSummary = {
+      table_id: table.id,
+      table_name: table.name,
+      table_status: table.status,
+      has_active_session: true,
+      session_id: session.id,
+      session_status: "open",
+      opened_at: session.opened_at,
+      total_orders: orders.length,
+      unpaid_orders_count: unpaidCount,
+      uncompleted_orders_count: uncompletedCount,
+      completed_orders_count: completedCount,
+      reserved_allocations_count: reservedAllocCount,
+      pending_midtrans_transactions_count: pendingTrxCount,
+      processing_webhooks_count: processingWebhookCount,
+      session_subtotal: sessionSubtotal,
+      session_discount_total: sessionDiscountTotal,
+      session_tax_total: sessionTaxTotal,
+      session_service_total: sessionServiceTotal,
+      session_grand_total: sessionGrandTotal,
+      session_paid_total: sessionPaidTotal,
+      session_remaining_balance: sessionRemainingBalance,
+      can_close_session: false,
+      blocking_reason: null,
+      orders,
+    };
 
-    if (unpaidCount > 0) {
-      blockingReason = "Terdapat pesanan yang belum lunas.";
-    } else if (sessionRemainingBalance > 0) {
-      blockingReason = "Masih ada sisa tagihan belum dibayar.";
-    } else if (reservedAllocCount > 0) {
-      blockingReason = "Terdapat alokasi pembayaran split bill yang masih berstatus reserved.";
-    } else if (pendingTrxCount > 0) {
-      blockingReason = "Terdapat transaksi gateway Midtrans yang masih aktif / belum selesai.";
-    } else if (processingWebhookCount > 0) {
-      blockingReason = "Terdapat notifikasi pembayaran webhook Midtrans yang sedang diproses.";
-    } else if (uncompletedCount > 0) {
-      blockingReason = "Terdapat pesanan lunas yang belum diserahkan ke pelanggan.";
-    } else if (activeKdsCount > 0) {
-      blockingReason = "Terdapat pesanan yang masih diproses dapur atau siap diambil.";
-    } else {
-      canClose = true;
-    }
+    const evaluation = evaluateDiningSessionClosure(fallbackSummary);
 
     return {
       ok: true,
       data: {
-        table_id: table.id,
-        table_name: table.name,
-        table_status: table.status,
-        has_active_session: true,
-        session_id: session.id,
-        opened_at: session.opened_at,
-        total_orders: orders.length,
-        unpaid_orders_count: unpaidCount,
-        uncompleted_orders_count: uncompletedCount,
-        completed_orders_count: completedCount,
-        reserved_allocations_count: reservedAllocCount,
-        pending_midtrans_transactions_count: pendingTrxCount,
-        processing_webhooks_count: processingWebhookCount,
-        session_subtotal: sessionSubtotal,
-        session_discount_total: sessionDiscountTotal,
-        session_tax_total: sessionTaxTotal,
-        session_service_total: sessionServiceTotal,
-        session_grand_total: sessionGrandTotal,
-        session_paid_total: sessionPaidTotal,
-        session_remaining_balance: sessionRemainingBalance,
-        can_close_session: canClose,
-        blocking_reason: blockingReason,
-        orders,
+        ...fallbackSummary,
+        can_close_session: evaluation.canClose,
+        blocking_reason: evaluation.blockingReason,
       },
     };
   }

@@ -160,6 +160,33 @@ export async function getCashierActor(): Promise<
   return { ok: true, session: state };
 }
 
+/**
+ * Server action friendly kitchen or admin check. Strictly excludes kasir so
+ * kitchen status mutations are only performed by kitchen staff or admin.
+ */
+export async function getKitchenActor(): Promise<
+  | { ok: true; session: AuthenticatedSession }
+  | { ok: false; message: string }
+> {
+  const state = await getSessionState();
+
+  if (state.status !== "authenticated") {
+    return {
+      ok: false,
+      message: "Sesi Anda tidak valid. Silakan masuk kembali.",
+    };
+  }
+
+  if (state.profile.role !== "admin" && state.profile.role !== "kitchen") {
+    return {
+      ok: false,
+      message: "Hanya staf dapur dan admin yang dapat mengakses modul KDS.",
+    };
+  }
+
+  return { ok: true, session: state };
+}
+
 export function isRoleAllowed(
   role: UserRole,
   allowed: UserRole | UserRole[],

@@ -3,9 +3,9 @@
 | Field | Nilai |
 | --- | --- |
 | Produk | Nine Licious POS |
-| Versi dokumen | 1.5 |
-| Tanggal | 11 November 2026 |
-| Status | F0 selesai; F1 dipecah menjadi F1.1–F1.4; implementasi menunggu persetujuan |
+| Versi dokumen | 1.7 |
+| Tanggal | 18 November 2026 |
+| Status | F0–F2.4, F3 KDS (`/kitchen`), dan Konfirmasi Penyajian Pesanan (`/pos`) selesai; menunggu eksekusi manual migrasi `20261118000100_order_serving_confirmation.sql` di Supabase; papan antrean `/queue` ditunda |
 | Dokumen terkait | [`docs/PRD.md`](./PRD.md), [`README.md`](../README.md) |
 
 > Roadmap ini adalah rencana eksekusi. Requirement lengkap ada di
@@ -79,7 +79,7 @@
 | **F1.3** | POS Core, Kunjungan & Pesanan | Rencana | POS dua bagian, keranjang, dine-in/takeaway, pesanan, pembatalan, handoff | Pesanan tersimpan menunggu pembayaran; tanpa KDS/antrean |
 | **F1.4** | Diskon & Finalisasi | Rencana | Diskon produk/pesanan/manual, approval, pajak/service, hardening | Seluruh acceptance F1 lulus |
 | **F2** | Pembayaran, split bill, pesanan tambahan, antrean, struk | Rencana | Tunai/QRIS Manual/QRIS Midtrans/transfer/Midtrans, split bill Midtrans per transaksi gateway, pesanan tambahan, nomor antrean, browser print 58/80 mm, refund | Pesanan lunas memicu antrean dan tiket KDS |
-| **F3** | KDS dan papan antrean | Rencana | KDS tiga status, realtime, papan publik, konfirmasi pengambilan kasir/admin, tampilan notifikasi refund | Hanya pesanan lunas yang tampil |
+| **F3** | KDS dan papan antrean | **KDS `/kitchen` & Konfirmasi Penyajian `/pos` Selesai** (`/queue` ditunda) | KDS tiga status (`queued`/`preparing`/`ready`), konfirmasi penyajian POS (`served_at`/`served_by` + `confirm_order_served_atomic`), realtime + polling, filter tipe & stasiun, badge pesanan tambahan, notifikasi refund penuh, RBAC ketat | Hanya pesanan lunas yang tampil; 12/12 tes F3 & 14/14 tes Konfirmasi Penyajian PASS |
 | **F4** | Stok dan bahan baku | Rencana | Bahan baku, resep, penyesuaian stok | Stok terhubung ke menu |
 | **F5** | Shift dan kas | Rencana | Shift, kas drawer, tutup shift, rekonsiliasi | Refund tunai terhubung ke shift |
 | **F6** | Laporan dan audit lanjutan | Rencana | Laporan, export, audit, penyempurnaan | Laporan operasional siap |
@@ -916,3 +916,5 @@ Untuk F1, definition of done berlaku **per milestone**:
 | 1.3 | 11 November 2026 | Sinkronkan dengan PRD 1.3: split bill Midtrans per transaksi gateway + callback idempoten + total pembayaran tidak melebihi tagihan; diskon produk/pesanan/manual dengan approval admin dan audit pada F1; browser print 58/80 mm pada F2 tanpa kewajiban ESC/POS |
 | 1.4 | 11 November 2026 | Audit konsistensi pra-F1: lima status pembayaran, refund penuh setelah lunas, penghentian tiket/antrean, arti override tutup meja, dan klarifikasi urutan pembayaran sebelum KDS |
 | 1.5 | 11 November 2026 | Pecah F1 menjadi F1.1 Menu & Master Data, F1.2 Meja & Denah, F1.3 POS Core/Kunjungan/Pesanan, dan F1.4 Diskon & Finalisasi; tambah acceptance/gate per milestone, pembatalan pesanan belum lunas, handoff ke pembayaran F2, tiga status meja (render F1.2, transisi Terisi F2), larangan KDS/antrean F1, serta migration F1 terpisah |
+| 1.6 | 18 November 2026 | Implementasi & verifikasi F3 KDS (`/kitchen`) tanpa migrasi SQL baru (skema `orders.kds_status`, `order_items.kitchen_station`, `refunds.kitchen_notified_at`, `audit_logs`, dan publikasi `supabase_realtime` sudah tersedia dari F1–F2.4). Papan antrean publik (`/queue`) ditunda ke sub-tahap berikutnya sesuai arahan produk |
+| 1.7 | 18 November 2026 | Implementasi & verifikasi Konfirmasi Pesanan Sudah Disajikan di POS (`/pos`): file migrasi `supabase/migrations/20261118000100_order_serving_confirmation.sql` (`served_at`, `served_by`, constraint sinkronisasi, index partial, dan RPC atomik `confirm_order_served_atomic`), panel "Menunggu Disajikan" Realtime + polling + dialog konfirmasi, terpisah dari `complete_pos_order` & penutupan sesi meja F2.3, tanpa status KDS ke-4 |

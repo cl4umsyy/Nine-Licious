@@ -1,14 +1,12 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   Check,
-  CheckCheck,
   CheckCircle2,
-  Clock,
   DoorOpen,
-  Info,
   Layers,
   LoaderCircle,
   Pencil,
@@ -19,32 +17,16 @@ import {
   Users,
 } from "lucide-react";
 import { toast } from "sonner";
+import { TableSessionDialog } from "@/components/tables/table-session-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { formatRupiah } from "@/lib/menu/format";
-import {
-  closeDiningSessionAction,
-  completePosOrderAction,
-  getDiningSessionSummaryAction,
-} from "@/lib/orders/actions";
-import { ORDER_STATUS_BADGES, ORDER_STATUS_LABELS } from "@/lib/orders/constants";
-import type { DiningSessionSummary } from "@/lib/orders/types";
 import {
   clampToFloorPlan,
   FLOOR_PLAN_HEIGHT,
   FLOOR_PLAN_WIDTH,
   snapToGrid,
   tableDimensions,
-  TABLE_SHAPE_LABELS,
   TABLE_STATUS_LABELS,
 } from "@/lib/tables/constants";
 import type { TablePosition } from "@/lib/tables/types";
@@ -63,6 +45,7 @@ export type FloorPlanCanvasProps = {
   selectable?: boolean;
   selectedTableId?: string | null;
   onSelectTable?: (table: DiningTable) => void;
+  onTableStatusUpdated?: (tableId: string, nextStatus: TableStatus) => void;
   hideHeader?: boolean;
   hideZoneTabs?: boolean;
 };
@@ -117,13 +100,32 @@ export function FloorPlanCanvas({
   selectable = false,
   selectedTableId,
   onSelectTable,
+  onTableStatusUpdated,
   hideHeader = false,
   hideZoneTabs = false,
 }: FloorPlanCanvasProps) {
+  const router = useRouter();
   const containerRef = useRef<HTMLDivElement>(null);
   const [internalZoneId, setInternalZoneId] = useState<string>(
     externalZoneId ?? zones[0]?.id ?? "",
   );
+  // Status override lokal agar perubahan meja ke 'empty' langsung tampak sebelum router.refresh selesai
+  const [statusOverrides, setStatusOverrides] = useState<Record<string, TableStatus>>({});
+
+  const effectiveTables = useMemo(
+    () =>
+      tables.map((t) =>
+        statusOverrides[t.id] ? { ...t, status: statusOverrides[t.id] } : t,
+      ),
+    [tables, statusOverrides],
+  );
+
+  // Bersihkan override lokal saat server props tables sudah diperbarui
+  const [prevTablesRef, setPrevTablesRef] = useState(tables);
+  if (tables !== prevTablesRef) {
+    setPrevTablesRef(tables);
+    setStatusOverrides({});
+  }
 
   const currentZoneId = externalZoneId ?? internalZoneId;
 
@@ -138,8 +140,8 @@ export function FloorPlanCanvas({
   );
 
   const zoneTables = useMemo(
-    () => tables.filter((t) => t.zone_id === currentZone?.id),
-    [tables, currentZone],
+    () => effectiveTables.filter((t) => t.zone_id === currentZone?.id),
+    [effectiveTables, currentZone],
   );
 
   // Local dragged positions: map table id -> { x, y }
@@ -147,56 +149,10 @@ export function FloorPlanCanvas({
   const [selectedTable, setSelectedTable] = useState<DiningTable | null>(null);
   const [inspectTable, setInspectTable] = useState<DiningTable | null>(null);
 
-  // F2.3: Dining Session Summary state for table inspection
-  const [sessionSummary, setSessionSummary] = useState<DiningSessionSummary | null>(null);
-  const [isLoadingSummary, setIsLoadingSummary] = useState(false);
-  const [isCompletingOrder, startCompletingOrder] = useTransition();
-  const [isClosingSession, startClosingSession] = useTransition();
-
-  const loadSessionSummary = useCallback(async (tableId: string) => {
-    setIsLoadingSummary(true);
-    try {
-      const res = await getDiningSessionSummaryAction(tableId);
-      if (res.ok && res.data) {
-        setSessionSummary(res.data);
-      } else {
-        setSessionSummary(null);
-      }
-    } catch {
-      setSessionSummary(null);
-    } finally {
-      setIsLoadingSummary(false);
-    }
-  }, []);
-
-  const handleCompleteOrder = (orderId: string) => {
-    startCompletingOrder(async () => {
-      const res = await completePosOrderAction(orderId);
-      if (res.ok) {
-        toast.success(res.message || "Pesanan berhasil diserahkan ke pelanggan.");
-        if (inspectTable) {
-          loadSessionSummary(inspectTable.id);
-        }
-      } else {
-        toast.error(res.message || "Gagal menyelesaikan pesanan.");
-      }
-    });
-  };
-
-  const handleCloseSession = () => {
-    if (!inspectTable || !sessionSummary?.session_id) return;
-    startClosingSession(async () => {
-      const res = await closeDiningSessionAction(
-        inspectTable.id,
-        sessionSummary.session_id!,
-      );
-      if (res.ok) {
-        toast.success(res.message || "Sesi kunjungan berhasil ditutup. Meja kini kosong.");
-        setInspectTable(null);
-      } else {
-        toast.error(res.message || "Gagal menutup sesi kunjungan.");
-      }
-    });
+  const handleSessionClosed = (tableId: string) => {
+    setStatusOverrides((prev) => ({ ...prev, [tableId]: "empty" }));
+    onTableStatusUpdated?.(tableId, "empty");
+    router.refresh();
   };
 
   // Reset local positions when zone changes
@@ -230,15 +186,7 @@ export function FloorPlanCanvas({
     e: React.PointerEvent<HTMLDivElement>,
     table: DiningTable,
   ) => {
-    if (selectable) {
-      onSelectTable?.(table);
-      setSelectedTable(table);
-      return;
-    }
-
-    if (!interactive) {
-      setInspectTable(table);
-      loadSessionSummary(table.id);
+    if (selectable || !interactive) {
       return;
     }
 
@@ -622,6 +570,17 @@ export function FloorPlanCanvas({
                       }
                       if (!interactive) setInspectTable(table);
                     }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        if (selectable) {
+                          onSelectTable?.(table);
+                          setSelectedTable(table);
+                        } else if (!interactive) {
+                          setInspectTable(table);
+                        }
+                      }
+                    }}
                     role="button"
                     tabIndex={0}
                     aria-label={`Meja ${table.name}, kapasitas ${table.capacity} orang, status ${TABLE_STATUS_LABELS[table.status]}`}
@@ -630,10 +589,10 @@ export function FloorPlanCanvas({
                       top: `${topPercent}%`,
                       width: `${widthPercent}%`,
                       height: `${heightPercent}%`,
-                      touchAction: "none",
+                      touchAction: interactive ? "none" : "auto",
                     }}
                     className={`absolute flex flex-col items-center justify-center border-2 transition-all ${
-                      selectable ? "cursor-pointer" : "cursor-grab active:cursor-grabbing"
+                      interactive ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
                     } ${
                       table.shape === "round"
                         ? "rounded-full"
@@ -742,230 +701,13 @@ export function FloorPlanCanvas({
         )}
       </div>
 
-      {/* Table inspection dialog (when clicking table in read-only / kasir mode) */}
-      <Dialog
-        open={Boolean(inspectTable)}
-        onOpenChange={(open) => {
-          if (!open) {
-            setInspectTable(null);
-            setSessionSummary(null);
-          }
-        }}
-      >
-        <DialogContent className="sm:max-w-lg max-h-[85vh] flex flex-col p-0 overflow-hidden">
-          <DialogHeader className="p-5 pb-3 border-b bg-muted/20">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <DialogTitle className="font-display text-lg">
-                  Meja {inspectTable?.name}
-                </DialogTitle>
-                {inspectTable && (
-                  <span
-                    className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                      STATUS_VARIANTS[inspectTable.status].badge
-                    }`}
-                  >
-                    <span
-                      className={`size-1.5 rounded-full ${
-                        STATUS_VARIANTS[inspectTable.status].dot
-                      }`}
-                    />
-                    {TABLE_STATUS_LABELS[inspectTable.status]}
-                  </span>
-                )}
-              </div>
-            </div>
-            <DialogDescription className="text-xs">
-              Detail informasi meja, sesi kunjungan, dan daftar pesanan aktif.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="flex-1 overflow-y-auto p-5 space-y-4 text-sm">
-            {inspectTable && (
-              <>
-                <div className="grid grid-cols-2 gap-2 text-xs bg-muted/40 p-3 rounded-lg border">
-                  <div>
-                    <span className="text-muted-foreground">Area: </span>
-                    <span className="font-medium text-foreground">
-                      {zones.find((z) => z.id === inspectTable.zone_id)?.name ?? "-"}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Kapasitas: </span>
-                    <span className="font-medium text-foreground">{inspectTable.capacity} orang</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Bentuk: </span>
-                    <span className="font-medium text-foreground">{TABLE_SHAPE_LABELS[inspectTable.shape]}</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Status: </span>
-                    <span className="font-semibold text-foreground">{TABLE_STATUS_LABELS[inspectTable.status]}</span>
-                  </div>
-                </div>
-
-                {/* Sesi Kunjungan & Orders Section */}
-                {isLoadingSummary ? (
-                  <div className="flex items-center justify-center p-6 text-muted-foreground gap-2">
-                    <LoaderCircle className="size-4 animate-spin text-primary" />
-                    <span className="text-xs">Memuat informasi sesi kunjungan...</span>
-                  </div>
-                ) : sessionSummary?.has_active_session ? (
-                  <div className="space-y-3">
-                    <div className="rounded-lg border bg-card p-3 space-y-2">
-                      <div className="flex items-center justify-between text-xs pb-1 border-b">
-                        <div className="flex items-center gap-1.5 font-semibold text-primary">
-                          <Clock className="size-3.5" />
-                          <span>Sesi Aktif</span>
-                        </div>
-                        <span className="text-[11px] text-muted-foreground">
-                          {sessionSummary.opened_at
-                            ? new Date(sessionSummary.opened_at).toLocaleTimeString("id-ID", {
-                                hour: "2-digit",
-                                minute: "2-digit",
-                              })
-                            : "-"}
-                        </span>
-                      </div>
-
-                      <div className="grid grid-cols-3 gap-2 text-center pt-1 text-xs">
-                        <div className="bg-muted/30 p-2 rounded">
-                          <div className="text-[10px] text-muted-foreground">Total Pesanan</div>
-                          <div className="font-bold text-sm">{sessionSummary.total_orders}</div>
-                        </div>
-                        <div className="bg-muted/30 p-2 rounded">
-                          <div className="text-[10px] text-muted-foreground">Total Tagihan</div>
-                          <div className="font-bold text-sm">{formatRupiah(sessionSummary.session_grand_total)}</div>
-                        </div>
-                        <div className="bg-muted/30 p-2 rounded">
-                          <div className="text-[10px] text-muted-foreground">Sisa Bayar</div>
-                          <div className={`font-bold text-sm ${sessionSummary.session_remaining_balance > 0 ? "text-rose-600" : "text-emerald-600"}`}>
-                            {formatRupiah(sessionSummary.session_remaining_balance)}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Order List */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                          Pesanan Dalam Sesi ({sessionSummary.orders.length})
-                        </span>
-                      </div>
-
-                      {sessionSummary.orders.length === 0 ? (
-                        <p className="text-xs text-muted-foreground italic">Belum ada pesanan.</p>
-                      ) : (
-                        <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                          {sessionSummary.orders.map((ord) => {
-                            const badgeCfg = ORDER_STATUS_BADGES[ord.status as keyof typeof ORDER_STATUS_BADGES] ?? {
-                              variant: "outline",
-                              className: "",
-                            };
-                            const isPaid = ord.status === "paid";
-
-                            return (
-                              <div
-                                key={ord.id}
-                                className="flex items-center justify-between p-2.5 rounded-lg border bg-muted/20 text-xs"
-                              >
-                                <div className="space-y-0.5">
-                                  <div className="flex items-center gap-1.5">
-                                    <span className="font-bold">#{ord.order_number}</span>
-                                    <Badge
-                                      variant={badgeCfg.variant}
-                                      className={`text-[10px] h-4 px-1.5 ${badgeCfg.className}`}
-                                    >
-                                      {ORDER_STATUS_LABELS[ord.status as keyof typeof ORDER_STATUS_LABELS] ?? ord.status}
-                                    </Badge>
-                                  </div>
-                                  <div className="text-[11px] text-muted-foreground">
-                                    {formatRupiah(ord.grand_total)}
-                                    {ord.remaining_balance > 0 && (
-                                      <span className="text-rose-600 font-medium ml-1">
-                                        (Sisa: {formatRupiah(ord.remaining_balance)})
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-
-                                {isPaid && (
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    disabled={isCompletingOrder}
-                                    onClick={() => handleCompleteOrder(ord.id)}
-                                    className="h-7 text-xs border-emerald-500 text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/40"
-                                  >
-                                    <CheckCheck className="size-3 mr-1" />
-                                    Serahkan ke Tamu
-                                  </Button>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Penutupan Sesi Action / Blocking Warning */}
-                    <div className="pt-2 border-t">
-                      {sessionSummary.can_close_session ? (
-                        <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-3 space-y-2 text-xs">
-                          <div className="flex items-center gap-2 text-emerald-800 dark:text-emerald-300 font-medium">
-                            <CheckCircle2 className="size-4 shrink-0 text-emerald-600" />
-                            <span>Semua pesanan telah lunas dan diserahkan ke tamu. Meja siap ditutup.</span>
-                          </div>
-                          <Button
-                            type="button"
-                            size="sm"
-                            disabled={isClosingSession}
-                            onClick={handleCloseSession}
-                            className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs h-8"
-                          >
-                            {isClosingSession ? (
-                              <LoaderCircle className="size-3.5 animate-spin mr-1.5" />
-                            ) : (
-                              <DoorOpen className="size-3.5 mr-1.5" />
-                            )}
-                            Tutup Kunjungan Meja (Kosongkan)
-                          </Button>
-                        </div>
-                      ) : (
-                        <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-2.5 text-xs text-amber-800 dark:text-amber-300 flex items-start gap-2">
-                          <Info className="size-4 shrink-0 mt-0.5 text-amber-600" />
-                          <div className="space-y-0.5">
-                            <span className="font-semibold">Kunjungan belum dapat ditutup: </span>
-                            <span>{sessionSummary.blocking_reason}</span>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="rounded-lg border border-border/80 p-3 bg-muted/20 text-xs text-muted-foreground flex items-start gap-2">
-                    <Info className="size-4 shrink-0 text-primary mt-0.5" />
-                    <span>Meja ini tidak memiliki sesi aktif. Pesanan baru dapat dibuat langsung melalui POS.</span>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-
-          <DialogFooter className="p-3 border-t bg-muted/20">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setInspectTable(null)}
-            >
-              Tutup
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Table session inspection & closure dialog (kasir / admin read-only mode) */}
+      <TableSessionDialog
+        table={inspectTable}
+        zones={zones}
+        onClose={() => setInspectTable(null)}
+        onSessionClosed={handleSessionClosed}
+      />
     </div>
   );
 }

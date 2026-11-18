@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState, useTransition } from "react";
 import {
   AlertCircle,
   Banknote,
-  Building2,
   CheckCircle,
   Clock,
   CreditCard,
@@ -12,7 +11,6 @@ import {
   Loader2,
   QrCode,
   RefreshCw,
-  ScanLine,
   Split,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -55,7 +53,7 @@ declare global {
   }
 }
 
-export type PaymentMethodTab = "cash" | "midtrans_snap" | "qris_manual" | "bank_transfer";
+export type PaymentMethodTab = "cash" | "midtrans_snap";
 export type SplitMode = "full" | "custom_amount" | "by_item";
 
 export type PaymentModalProps = {
@@ -83,7 +81,6 @@ export function PaymentModal({
   const [customAmount, setCustomAmount] = useState<number>(0);
   const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
   const [cashReceived, setCashReceived] = useState<string>("");
-  const [referenceNumber, setReferenceNumber] = useState<string>("");
   const [paymentNotes, setPaymentNotes] = useState<string>("");
   const [idempotencyKey, setIdempotencyKey] = useState<string>(() => crypto.randomUUID());
   const [activeSnapToken, setActiveSnapToken] = useState<string | null>(null);
@@ -96,7 +93,6 @@ export function PaymentModal({
     setCustomAmount(rem);
     setCashReceived(rem.toString());
     setSelectedItemIds(new Set());
-    setReferenceNumber("");
     setPaymentNotes("");
     setIdempotencyKey(crypto.randomUUID());
     setMethod("cash");
@@ -120,7 +116,7 @@ export function PaymentModal({
       }}
     >
       <DialogContent
-        className="max-w-xl max-h-[90vh] flex flex-col p-0 overflow-hidden"
+        className="w-[calc(100vw-1.5rem)] max-w-[800px] sm:max-w-[780px] lg:max-w-[800px] max-h-[90dvh] flex flex-col p-0 gap-0 overflow-hidden rounded-2xl shadow-2xl"
         onPointerDownOutside={(e) => {
           if (midtransWaiting) {
             e.preventDefault();
@@ -149,8 +145,6 @@ export function PaymentModal({
             setSelectedItemIds={setSelectedItemIds}
             cashReceived={cashReceived}
             setCashReceived={setCashReceived}
-            referenceNumber={referenceNumber}
-            setReferenceNumber={setReferenceNumber}
             paymentNotes={paymentNotes}
             setPaymentNotes={setPaymentNotes}
             idempotencyKey={idempotencyKey}
@@ -180,8 +174,6 @@ function PaymentModalContent({
   setSelectedItemIds,
   cashReceived,
   setCashReceived,
-  referenceNumber,
-  setReferenceNumber,
   paymentNotes,
   setPaymentNotes,
   idempotencyKey,
@@ -204,8 +196,6 @@ function PaymentModalContent({
   setSelectedItemIds: (s: Set<string>) => void;
   cashReceived: string;
   setCashReceived: (s: string) => void;
-  referenceNumber: string;
-  setReferenceNumber: (s: string) => void;
   paymentNotes: string;
   setPaymentNotes: (s: string) => void;
   idempotencyKey: string;
@@ -217,6 +207,11 @@ function PaymentModalContent({
   // State proses transaksi & Midtrans
   const [isSubmitting, startTransition] = useTransition();
   const [isVerifyingMidtrans, setIsVerifyingMidtrans] = useState(false);
+  const [snapLoadError, setSnapLoadError] = useState<string | null>(() =>
+    !process.env.NEXT_PUBLIC_MIDTRANS_CLIENT_KEY
+      ? "NEXT_PUBLIC_MIDTRANS_CLIENT_KEY belum dikonfigurasi di browser."
+      : null,
+  );
 
   // Muat script Midtrans Snap secara dinamis untuk environment sandbox
   useEffect(() => {
@@ -224,12 +219,21 @@ function PaymentModalContent({
     if (!clientKey) return;
 
     const scriptId = "midtrans-snap-script";
-    if (!document.getElementById(scriptId)) {
-      const script = document.createElement("script");
+    let script = document.getElementById(scriptId) as HTMLScriptElement | null;
+    if (!script) {
+      script = document.createElement("script");
       script.id = scriptId;
       script.src = "https://app.sandbox.midtrans.com/snap/snap.js";
       script.setAttribute("data-client-key", clientKey);
       script.async = true;
+      script.onload = () => {
+        setSnapLoadError(null);
+      };
+      script.onerror = () => {
+        const msg = "Gagal memuat skrip Midtrans Snap dari CDN. Periksa koneksi internet atau pemblokir iklan/skrip.";
+        setSnapLoadError(msg);
+        console.error("[Midtrans Snap]", msg);
+      };
       document.body.appendChild(script);
     }
   }, []);
@@ -346,28 +350,14 @@ function PaymentModalContent({
     }
 
     startTransition(async () => {
-      let paymentSource: "cash" | "qris_manual" | "bank_transfer" = "cash";
-      let paymentMethod: "cash" | "qris" | "bank_transfer" = "cash";
-
-      if (method === "cash") {
-        paymentMethod = "cash";
-        paymentSource = "cash";
-      } else if (method === "qris_manual") {
-        paymentMethod = "qris";
-        paymentSource = "qris_manual";
-      } else if (method === "bank_transfer") {
-        paymentMethod = "bank_transfer";
-        paymentSource = "bank_transfer";
-      }
-
       const payload = {
         orderId: order.id,
-        paymentMethod,
-        paymentSource,
+        paymentMethod: "cash" as const,
+        paymentSource: "cash" as const,
         amount: payAmount,
-        cashReceived: method === "cash" ? parsedCashReceived : null,
-        changeAmount: method === "cash" ? changeAmount : 0,
-        referenceNumber: referenceNumber.trim() || null,
+        cashReceived: parsedCashReceived,
+        changeAmount,
+        referenceNumber: null,
         idempotencyKey,
         notes: paymentNotes.trim() || null,
       };
@@ -437,6 +427,7 @@ function PaymentModalContent({
 
       if (!result.ok || !result.data?.snapToken) {
         toast.error(result.message || "Gagal membuat transaksi Midtrans Snap.");
+        setMidtransWaiting(false);
         return;
       }
 
@@ -451,34 +442,51 @@ function PaymentModalContent({
   // Helper untuk membuka popup Midtrans Snap menggunakan token aktif
   const triggerSnapPopup = (snapToken: string) => {
     if (!window.snap) {
-      toast.error("Skrip Midtrans Snap belum siap di browser. Silakan muat ulang halaman.");
+      const clientKey = process.env.NEXT_PUBLIC_MIDTRANS_CLIENT_KEY;
+      if (!clientKey) {
+        toast.error("NEXT_PUBLIC_MIDTRANS_CLIENT_KEY belum diisi di environment.");
+      } else if (snapLoadError) {
+        toast.error(snapLoadError);
+      } else {
+        toast.error("Skrip Midtrans Snap belum siap di browser. Silakan muat ulang halaman atau periksa koneksi internet.");
+      }
       return;
     }
 
     setMidtransWaiting(true);
-    window.snap.pay(snapToken, {
-      onSuccess: () => {
-        setMidtransWaiting(false);
-        toast.success("Pembayaran Midtrans berhasil diselesaikan.");
-        checkServerPaymentStatus();
-      },
-      onPending: () => {
-        setMidtransWaiting(false);
-        toast.info("Pembayaran menunggu penyelesaian pelanggan.");
-        checkServerPaymentStatus();
-      },
-      onError: () => {
-        setMidtransWaiting(false);
-        toast.error("Terjadi kegagalan pada transaksi Midtrans.");
-      },
-      onClose: () => {
-        // Sesuai aturan: Jangan menganggap berhasil hanya karena popup ditutup.
-        // Tetap verifikasi status aktual dari server/webhook via rekonsiliasi aktif.
-        setMidtransWaiting(false);
-        toast.info("Popup ditutup. Memeriksa status verifikasi server...");
-        checkServerPaymentStatus();
-      },
-    });
+    try {
+      window.snap.pay(snapToken, {
+        onSuccess: () => {
+          setMidtransWaiting(false);
+          toast.success("Pembayaran Midtrans berhasil diselesaikan.");
+          checkServerPaymentStatus();
+        },
+        onPending: () => {
+          setMidtransWaiting(false);
+          toast.info("Pembayaran menunggu penyelesaian pelanggan.");
+          checkServerPaymentStatus();
+        },
+        onError: (err) => {
+          setMidtransWaiting(false);
+          console.error("[Midtrans Snap] Transaksi onError:", err);
+          toast.error("Terjadi kegagalan pada transaksi Midtrans.");
+        },
+        onClose: () => {
+          // Sesuai aturan: Jangan menganggap berhasil hanya karena popup ditutup.
+          // Tetap verifikasi status aktual dari server/webhook via rekonsiliasi aktif.
+          setMidtransWaiting(false);
+          toast.info("Popup ditutup. Memeriksa status verifikasi server...");
+          checkServerPaymentStatus();
+        },
+      });
+    } catch (popupErr) {
+      setMidtransWaiting(false);
+      console.error("[Midtrans Snap] Eksepsi saat membuka snap.pay:", popupErr);
+      toast.error(
+        "Gagal menampilkan popup Snap: " +
+          (popupErr instanceof Error ? popupErr.message : "Kesalahan tidak terduga"),
+      );
+    }
   };
 
   // Verifikasi status pembayaran tepercaya dari server dengan rekonsiliasi aktif
@@ -532,17 +540,17 @@ function PaymentModalContent({
   return (
     <>
       {/* Header */}
-      <DialogHeader className="p-5 pb-3 border-b bg-muted/20">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+      <DialogHeader className="px-5 sm:px-6 py-4 sm:py-5 pr-12 sm:pr-14 border-b bg-muted/20 shrink-0 text-left">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
               <CreditCard className="size-5" />
             </div>
-            <div>
-              <DialogTitle className="text-base font-bold font-display">
+            <div className="min-w-0 space-y-0.5">
+              <DialogTitle className="text-base sm:text-lg font-bold font-display leading-snug truncate">
                 Pembayaran Pesanan #{order.order_number}
               </DialogTitle>
-              <DialogDescription className="text-xs">
+              <DialogDescription className="text-xs text-muted-foreground">
                 {order.order_type === "dine_in"
                   ? `Dine-in (${order.tableName || "Meja"})`
                   : "Takeaway"}{" "}
@@ -551,9 +559,11 @@ function PaymentModalContent({
             </div>
           </div>
 
-          <div className="text-right">
-            <span className="text-[11px] text-muted-foreground block">Sisa Tagihan</span>
-            <span className="text-base font-bold font-display text-primary">
+          <div className="rounded-xl border border-border/75 bg-card px-3.5 py-2 flex items-center justify-between sm:block sm:text-right shrink-0 shadow-2xs">
+            <span className="text-[11px] font-medium text-muted-foreground sm:block">
+              Sisa Tagihan
+            </span>
+            <span className="text-base sm:text-lg font-bold font-display text-primary tracking-tight">
               {formatRupiah(remainingBalance)}
             </span>
           </div>
@@ -561,15 +571,15 @@ function PaymentModalContent({
       </DialogHeader>
 
       {/* Main Content */}
-      <div className="flex-1 overflow-y-auto p-5 space-y-4 text-xs">
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-5 sm:px-6 py-5 space-y-5 text-xs">
         {/* Mode Split Bill Selector */}
-        <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
-          <div className="flex items-center justify-between">
-            <Label className="text-xs font-bold flex items-center gap-1.5">
-              <Split className="size-3.5 text-primary" />
+        <div className="rounded-2xl border border-border/80 bg-muted/15 p-4 space-y-3.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Label className="text-xs font-bold flex items-center gap-2 text-foreground">
+              <Split className="size-3.5 text-primary shrink-0" />
               Opsi Pembagian Tagihan (Split Bill)
             </Label>
-            <Badge variant="outline" className="text-[10px]">
+            <Badge variant="outline" className="text-[11px] px-2.5 py-0.5 bg-card font-medium">
               {splitMode === "full"
                 ? "Bayar Penuh"
                 : splitMode === "custom_amount"
@@ -581,45 +591,71 @@ function PaymentModalContent({
           <RadioGroup
             value={splitMode}
             onValueChange={(val) => setSplitMode(val as SplitMode)}
-            className="grid grid-cols-3 gap-2 pt-1"
+            className="grid grid-cols-1 sm:grid-cols-3 gap-2.5"
           >
-            <div className="flex items-center space-x-2 rounded-lg border p-2 bg-background hover:bg-muted/50 cursor-pointer">
+            <label
+              htmlFor="split-full"
+              className={cn(
+                "flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 cursor-pointer transition-all",
+                splitMode === "full"
+                  ? "border-primary bg-primary/5 shadow-2xs"
+                  : "border-border/75 bg-card hover:bg-muted/40",
+              )}
+            >
               <RadioGroupItem value="full" id="split-full" />
-              <Label htmlFor="split-full" className="text-[11px] font-medium cursor-pointer">
+              <span className="text-xs font-semibold text-foreground">
                 Bayar Penuh
-              </Label>
-            </div>
+              </span>
+            </label>
 
-            <div className="flex items-center space-x-2 rounded-lg border p-2 bg-background hover:bg-muted/50 cursor-pointer">
+            <label
+              htmlFor="split-custom"
+              className={cn(
+                "flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 cursor-pointer transition-all",
+                splitMode === "custom_amount"
+                  ? "border-primary bg-primary/5 shadow-2xs"
+                  : "border-border/75 bg-card hover:bg-muted/40",
+              )}
+            >
               <RadioGroupItem value="custom_amount" id="split-custom" />
-              <Label htmlFor="split-custom" className="text-[11px] font-medium cursor-pointer">
+              <span className="text-xs font-semibold text-foreground">
                 Nominal Parsial
-              </Label>
-            </div>
+              </span>
+            </label>
 
-            <div className="flex items-center space-x-2 rounded-lg border p-2 bg-background hover:bg-muted/50 cursor-pointer">
+            <label
+              htmlFor="split-item"
+              className={cn(
+                "flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 cursor-pointer transition-all",
+                splitMode === "by_item"
+                  ? "border-primary bg-primary/5 shadow-2xs"
+                  : "border-border/75 bg-card hover:bg-muted/40",
+              )}
+            >
               <RadioGroupItem value="by_item" id="split-item" />
-              <Label htmlFor="split-item" className="text-[11px] font-medium cursor-pointer">
+              <span className="text-xs font-semibold text-foreground">
                 Pilih Item
-              </Label>
-            </div>
+              </span>
+            </label>
           </RadioGroup>
 
           {/* Input Kustom Nominal Parsial */}
           {splitMode === "custom_amount" && (
-            <div className="pt-2 space-y-1">
-              <Label className="text-[11px] text-muted-foreground">
-                Nominal Pembayaran Kali Ini:
+            <div className="pt-1.5 space-y-2">
+              <Label className="text-xs font-medium text-muted-foreground">
+                Nominal Pembayaran Kali Ini
               </Label>
               <div className="relative">
-                <span className="absolute left-3 top-2.5 text-xs text-muted-foreground">Rp</span>
+                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-xs font-semibold text-muted-foreground">
+                  Rp
+                </span>
                 <Input
                   type="number"
                   min={1}
                   max={remainingBalance}
                   value={customAmount || ""}
                   onChange={(e) => setCustomAmount(parseInt(e.target.value, 10) || 0)}
-                  className="pl-8 h-9 text-xs font-mono font-bold"
+                  className="pl-10 h-10 text-sm font-mono font-bold rounded-xl bg-card"
                 />
               </div>
             </div>
@@ -627,8 +663,8 @@ function PaymentModalContent({
 
           {/* Pilihan Item untuk Split Bill Item */}
           {splitMode === "by_item" && (
-            <div className="pt-2 space-y-1.5 max-h-36 overflow-y-auto">
-              <Label className="text-[11px] text-muted-foreground">
+            <div className="pt-1.5 space-y-2 max-h-44 overflow-y-auto pr-1">
+              <Label className="text-xs font-medium text-muted-foreground">
                 Centang item yang akan dibayar pada transaksi ini:
               </Label>
               {order.items.map((it) => {
@@ -642,22 +678,22 @@ function PaymentModalContent({
                       else updated.add(it.id);
                       setSelectedItemIds(updated);
                     }}
-                    className={`flex items-center justify-between p-2 rounded-lg border cursor-pointer transition-colors ${
-                      isSelected ? "border-primary bg-primary/5" : "bg-background"
+                    className={`flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl border cursor-pointer transition-colors ${
+                      isSelected ? "border-primary bg-primary/5" : "border-border/75 bg-card hover:bg-muted/40"
                     }`}
                   >
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2.5 min-w-0">
                       <input
                         type="checkbox"
                         checked={isSelected}
                         onChange={() => {}} // dikontrol parent div
-                        className="rounded border-input text-primary"
+                        className="rounded border-input text-primary shrink-0"
                       />
-                      <span className="font-medium text-[11px]">
-                        {it.product_name_snapshot} x{it.quantity}
+                      <span className="font-medium text-xs truncate">
+                        {it.product_name_snapshot} ×{it.quantity}
                       </span>
                     </div>
-                    <span className="font-mono text-[11px] font-bold">
+                    <span className="font-mono text-xs font-bold shrink-0">
                       {formatRupiah(it.line_total)}
                     </span>
                   </div>
@@ -668,89 +704,66 @@ function PaymentModalContent({
         </div>
 
         {/* Total Tagihan yang Dibayar */}
-        <div className="rounded-xl border p-3 bg-card flex items-center justify-between">
-          <span className="font-bold text-xs">Total Pembayaran Sekarang</span>
-          <span className="font-display font-bold text-lg text-primary">
+        <div className="rounded-2xl border border-primary/25 bg-brand-soft/30 px-4 sm:px-5 py-3.5 flex flex-wrap items-center justify-between gap-2">
+          <span className="font-bold text-xs sm:text-sm text-foreground">
+            Total Pembayaran Sekarang
+          </span>
+          <span className="font-display font-bold text-xl sm:text-2xl text-primary tracking-tight">
             {formatRupiah(payAmount)}
           </span>
         </div>
 
         {/* Tab Metode Pembayaran */}
-        <div className="space-y-3">
-          <div className="grid grid-cols-4 gap-1 p-1 bg-muted/40 rounded-xl border">
-            <button
-              type="button"
-              onClick={() => {
-                setMethod("cash");
-                setMidtransWaiting(false);
-              }}
-              className={cn(
-                "flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-semibold transition-all",
-                method === "cash"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted/30"
-              )}
-            >
-              <Banknote className="size-3.5" />
-              Tunai
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setMethod("midtrans_snap");
-                setMidtransWaiting(false);
-              }}
-              className={cn(
-                "flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-semibold transition-all",
-                method === "midtrans_snap"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted/30"
-              )}
-            >
-              <QrCode className="size-3.5" />
-              Midtrans
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setMethod("qris_manual");
-                setMidtransWaiting(false);
-              }}
-              className={cn(
-                "flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-semibold transition-all",
-                method === "qris_manual"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted/30"
-              )}
-            >
-              <ScanLine className="size-3.5" />
-              QRIS
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setMethod("bank_transfer");
-                setMidtransWaiting(false);
-              }}
-              className={cn(
-                "flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-semibold transition-all",
-                method === "bank_transfer"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted/30"
-              )}
-            >
-              <Building2 className="size-3.5" />
-              Transfer
-            </button>
+        <div className="space-y-3.5">
+          <div className="space-y-2">
+            <Label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Metode Pembayaran
+            </Label>
+            <div className="grid grid-cols-2 gap-2.5 p-1.5 bg-muted/45 rounded-2xl border border-border/70">
+              <button
+                type="button"
+                onClick={() => {
+                  setMethod("cash");
+                  setMidtransWaiting(false);
+                }}
+                className={cn(
+                  "flex items-center justify-center gap-2 h-11 px-4 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer",
+                  method === "cash"
+                    ? "bg-primary text-primary-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground hover:bg-card/80",
+                )}
+              >
+                <Banknote className="size-4 shrink-0" />
+                <span>Tunai</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMethod("midtrans_snap");
+                  setMidtransWaiting(false);
+                }}
+                className={cn(
+                  "flex items-center justify-center gap-2 h-11 px-4 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer",
+                  method === "midtrans_snap"
+                    ? "bg-primary text-primary-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground hover:bg-card/80",
+                )}
+              >
+                <QrCode className="size-4 shrink-0" />
+                <span>Midtrans</span>
+              </button>
+            </div>
           </div>
 
           {/* TAB 1: TUNAI (CASH) */}
           {method === "cash" && (
-            <div className="space-y-3 pt-1">
-              <div className="space-y-1.5">
-                <Label className="text-xs font-semibold">Uang Tunai Diterima (Cash Received)</Label>
+            <div className="rounded-2xl border border-border/80 bg-card p-4 sm:p-5 space-y-4">
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold text-foreground">
+                  Uang Tunai Diterima (Cash Received)
+                </Label>
                 <div className="relative">
-                  <span className="absolute left-3 top-2.5 text-xs text-muted-foreground font-semibold">
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-semibold">
                     Rp
                   </span>
                   <Input
@@ -759,50 +772,55 @@ function PaymentModalContent({
                     value={cashReceived}
                     onChange={(e) => setCashReceived(e.target.value)}
                     placeholder="0"
-                    className="pl-9 h-10 text-sm font-mono font-bold"
+                    className="pl-10 h-11 text-base font-mono font-bold rounded-xl"
                   />
                 </div>
               </div>
 
               {/* Quick Cash Buttons */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {quickCashPresets.map((preset) => (
-                  <Button
-                    key={preset}
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setCashReceived(preset.toString())}
-                    className={`h-8.5 px-3 text-xs font-mono font-semibold rounded-lg transition-colors ${
-                      parsedCashReceived === preset
-                        ? "border-primary bg-primary/10 text-primary font-bold shadow-2xs"
-                        : "hover:bg-muted/60"
-                    }`}
-                  >
-                    {preset === payAmount ? "Uang Pas" : formatRupiah(preset)}
-                  </Button>
-                ))}
+              <div className="space-y-2">
+                <span className="text-[11px] font-medium text-muted-foreground block">
+                  Nominal Cepat
+                </span>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  {quickCashPresets.map((preset) => (
+                    <Button
+                      key={preset}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setCashReceived(preset.toString())}
+                      className={`h-9.5 px-3 text-xs font-mono font-semibold rounded-xl transition-colors ${
+                        parsedCashReceived === preset
+                          ? "border-primary bg-primary/10 text-primary font-bold shadow-2xs"
+                          : "border-border/80 hover:bg-muted/60"
+                      }`}
+                    >
+                      {preset === payAmount ? "Uang Pas" : formatRupiah(preset)}
+                    </Button>
+                  ))}
+                </div>
               </div>
 
               {/* Kembalian Box */}
               <div
-                className={`rounded-xl border p-3 flex items-center justify-between ${
+                className={`rounded-xl border px-4 py-3.5 flex items-center justify-between gap-3 ${
                   isCashDeficit
                     ? "border-amber-500/40 bg-amber-500/10 text-amber-900 dark:text-amber-200"
                     : "border-emerald-500/40 bg-emerald-500/10 text-emerald-900 dark:text-emerald-200"
                 }`}
               >
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2.5">
                   {isCashDeficit ? (
-                    <AlertCircle className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                    <AlertCircle className="size-4.5 shrink-0 text-amber-600 dark:text-amber-400" />
                   ) : (
-                    <CheckCircle className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                    <CheckCircle className="size-4.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
                   )}
-                  <span className="font-semibold text-xs">
+                  <span className="font-semibold text-xs sm:text-sm">
                     {isCashDeficit ? "Uang Tunai Kurang" : "Kembalian"}
                   </span>
                 </div>
-                <span className="font-mono font-bold text-base">
+                <span className="font-mono font-bold text-lg tracking-tight">
                   {isCashDeficit
                     ? `- ${formatRupiah(payAmount - parsedCashReceived)}`
                     : formatRupiah(changeAmount)}
@@ -813,169 +831,135 @@ function PaymentModalContent({
 
           {/* TAB 2: MIDTRANS SNAP (SANDBOX) */}
           {method === "midtrans_snap" && (
-            <div className="space-y-3 pt-1">
-              <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 space-y-3 text-xs">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold flex items-center gap-1.5 text-foreground">
-                    <QrCode className="size-4 text-primary" />
-                    Midtrans Snap Gateway (Sandbox)
-                  </span>
-                  <Badge variant="outline" className="text-[10px] border-primary/40 text-primary">
-                    Sandbox Active
-                  </Badge>
+            <div className="rounded-2xl border border-primary/25 bg-primary/5 p-4 sm:p-5 space-y-4 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-bold text-sm flex items-center gap-2 text-foreground">
+                  <QrCode className="size-4 text-primary shrink-0" />
+                  Midtrans Snap Gateway (Sandbox)
+                </span>
+                <Badge
+                  variant="outline"
+                  className="text-[11px] px-2.5 py-0.5 border-primary/40 bg-card text-primary font-semibold shrink-0"
+                >
+                  Sandbox Active
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Membuka popup pembayaran Snap terintegrasi. Pelanggan dapat membayar via simulator QRIS,
+                GoPay, ShopeePay, atau Virtual Account bank.
+              </p>
+
+              {snapLoadError && (
+                <div className="rounded-xl bg-destructive/10 border border-destructive/20 p-3 text-xs text-destructive flex items-start gap-2.5">
+                  <AlertCircle className="size-4 shrink-0 mt-0.5" />
+                  <span>{snapLoadError}</span>
                 </div>
-                <p className="text-[11px] text-muted-foreground leading-relaxed">
-                  Membuka popup pembayaran Snap terintegrasi. Pelanggan dapat membayar via simulator QRIS
-                  GoPay, ShopeePay, atau Virtual Account bank.
-                </p>
+              )}
 
-                {/* Status Box & Tombol Cek Status */}
-                {activeSnapToken ? (
-                  <div className="pt-2.5 border-t border-primary/20 space-y-2.5">
-                    <div className="flex items-center justify-between text-[11px]">
-                      <div className="flex items-center gap-1.5 font-medium text-foreground">
-                        <Clock className="size-3.5 text-amber-500" />
-                        <span>Transaksi Snap Aktif</span>
-                      </div>
-                      <Badge variant="secondary" className="text-[10px] font-mono">
-                        Menunggu Verifikasi
-                      </Badge>
+              {/* Status Box & Tombol Cek Status */}
+              {activeSnapToken ? (
+                <div className="rounded-xl border border-primary/20 bg-card/85 p-4 space-y-3.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 font-semibold text-xs text-foreground">
+                      <Clock className="size-4 text-amber-500 shrink-0" />
+                      <span>Transaksi Snap Aktif</span>
                     </div>
-
-                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 pt-1.5">
-                      <Button
-                        type="button"
-                        size="default"
-                        variant="default"
-                        disabled={isVerifyingMidtrans || isSubmitting}
-                        onClick={checkServerPaymentStatus}
-                        className="flex-1 h-9 px-4 text-xs font-bold gap-2 bg-primary text-primary-foreground shadow-xs rounded-xl"
-                      >
-                        <RefreshCw className={`size-3.5 ${isVerifyingMidtrans ? "animate-spin" : ""}`} />
-                        {isVerifyingMidtrans ? "Memeriksa Status..." : "Cek Status Pembayaran"}
-                      </Button>
-
-                      <Button
-                        type="button"
-                        size="default"
-                        variant="outline"
-                        disabled={isVerifyingMidtrans || isSubmitting || midtransWaiting}
-                        onClick={() => triggerSnapPopup(activeSnapToken)}
-                        className="h-9 px-4 text-xs font-semibold gap-2 border-primary/40 hover:bg-primary/10 rounded-xl"
-                      >
-                        <ExternalLink className="size-3.5" />
-                        Buka Ulang Snap
-                      </Button>
-                    </div>
+                    <Badge variant="secondary" className="text-[11px] px-2.5 py-0.5 font-mono">
+                      Menunggu Verifikasi
+                    </Badge>
                   </div>
-                ) : midtransWaiting ? (
-                  <div className="pt-2 border-t border-primary/20 flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-primary font-medium text-[11px]">
-                      <Loader2 className="size-3.5 animate-spin" />
-                      Menunggu konfirmasi pembayaran...
-                    </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    <Button
+                      type="button"
+                      size="default"
+                      variant="default"
+                      disabled={isVerifyingMidtrans || isSubmitting}
+                      onClick={checkServerPaymentStatus}
+                      className="h-10 px-4 text-xs font-bold gap-2 bg-primary text-primary-foreground shadow-xs rounded-xl"
+                    >
+                      <RefreshCw className={`size-3.5 shrink-0 ${isVerifyingMidtrans ? "animate-spin" : ""}`} />
+                      <span>{isVerifyingMidtrans ? "Memeriksa Status..." : "Cek Status Pembayaran"}</span>
+                    </Button>
+
+                    <Button
+                      type="button"
+                      size="default"
+                      variant="outline"
+                      disabled={isVerifyingMidtrans || isSubmitting || midtransWaiting}
+                      onClick={() => triggerSnapPopup(activeSnapToken)}
+                      className="h-10 px-4 text-xs font-semibold gap-2 border-primary/40 bg-card hover:bg-primary/10 rounded-xl"
+                    >
+                      <ExternalLink className="size-3.5 shrink-0" />
+                      <span>Buka Ulang Snap</span>
+                    </Button>
                   </div>
-                ) : (
-                  <p className="text-[10px] text-muted-foreground italic">
-                    Klik tombol di bawah untuk membuka popup pembayaran Midtrans Snap.
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* TAB 3: QRIS MANUAL */}
-          {method === "qris_manual" && (
-            <div className="space-y-3 pt-1">
-              <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
-                <p className="text-[11px] text-muted-foreground">
-                  Gunakan jika pelanggan memindai barcode QRIS statis di meja kasir Nine Licious.
-                </p>
-                <div className="space-y-1">
-                  <Label className="text-[11px]">Nomor Referensi / RRN QRIS (Opsional)</Label>
-                  <Input
-                    type="text"
-                    placeholder="Contoh: RRN-981240192"
-                    value={referenceNumber}
-                    onChange={(e) => setReferenceNumber(e.target.value)}
-                    className="h-8 text-xs font-mono"
-                  />
                 </div>
-              </div>
-            </div>
-          )}
-
-          {/* TAB 4: BANK TRANSFER */}
-          {method === "bank_transfer" && (
-            <div className="space-y-3 pt-1">
-              <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
-                <p className="text-[11px] text-muted-foreground">
-                  Pencatatan pembayaran transfer bank langsung ke rekening operasional resto.
-                </p>
-                <div className="space-y-1">
-                  <Label className="text-[11px]">Nomor Referensi Transfer / Bukti (Opsional)</Label>
-                  <Input
-                    type="text"
-                    placeholder="Contoh: TRF-BCA-102931"
-                    value={referenceNumber}
-                    onChange={(e) => setReferenceNumber(e.target.value)}
-                    className="h-8 text-xs font-mono"
-                  />
+              ) : midtransWaiting ? (
+                <div className="pt-3 border-t border-primary/20 flex items-center gap-2.5 text-primary font-medium text-xs">
+                  <Loader2 className="size-4 animate-spin shrink-0" />
+                  <span>Menunggu konfirmasi pembayaran...</span>
                 </div>
-              </div>
+              ) : (
+                <p className="text-[11px] text-muted-foreground italic pt-1 border-t border-primary/15">
+                  Klik tombol di bawah untuk membuka popup pembayaran Midtrans Snap.
+                </p>
+              )}
             </div>
           )}
         </div>
 
         {/* Catatan Transaksi */}
-        <div className="space-y-1">
-          <Label className="text-[11px] text-muted-foreground">Catatan Pembayaran (Opsional)</Label>
+        <div className="space-y-2">
+          <Label className="text-xs font-semibold text-foreground">
+            Catatan Pembayaran (Opsional)
+          </Label>
           <Input
             type="text"
             placeholder="Keterangan tambahan transaksi..."
             value={paymentNotes}
             onChange={(e) => setPaymentNotes(e.target.value)}
-            className="h-8 text-xs"
+            className="h-10 text-xs sm:text-sm rounded-xl bg-card"
           />
         </div>
       </div>
 
       {/* Footer */}
-      <DialogFooter className="p-4 sm:p-5 border-t bg-muted/20 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-3">
+      <DialogFooter className="mx-0 mb-0 px-5 sm:px-6 py-4 border-t bg-muted/25 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 shrink-0 rounded-b-2xl">
         <Button
           type="button"
-          variant="ghost"
+          variant="outline"
           size="default"
           disabled={isSubmitting || midtransWaiting}
           onClick={onClose}
-          className="h-10 px-4 text-xs font-medium rounded-xl hover:bg-muted"
+          className="h-11 px-5 text-xs sm:text-sm font-semibold rounded-xl border-border/80 bg-card hover:bg-muted w-full sm:w-auto"
         >
           Batal
         </Button>
 
         {method === "midtrans_snap" ? (
           activeSnapToken ? (
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto">
               <Button
                 type="button"
                 size="default"
                 variant="outline"
                 disabled={isSubmitting || isVerifyingMidtrans || midtransWaiting}
                 onClick={() => triggerSnapPopup(activeSnapToken)}
-                className="h-10 px-4 text-xs font-semibold rounded-xl border-primary/40 hover:bg-primary/10 gap-2"
+                className="h-11 px-4 text-xs sm:text-sm font-semibold rounded-xl border-primary/40 bg-card hover:bg-primary/10 gap-2"
               >
-                <ExternalLink className="size-3.5" />
-                Buka Ulang Snap
+                <ExternalLink className="size-4 shrink-0" />
+                <span>Buka Ulang Snap</span>
               </Button>
               <Button
                 type="button"
                 size="default"
                 disabled={isSubmitting || isVerifyingMidtrans}
                 onClick={checkServerPaymentStatus}
-                className="h-10 px-5 text-xs font-bold bg-primary text-primary-foreground shadow-sm rounded-xl gap-2 hover:bg-primary/90"
+                className="h-11 px-5 sm:px-6 text-xs sm:text-sm font-bold bg-primary text-primary-foreground shadow-sm rounded-xl gap-2 hover:bg-primary/90"
               >
-                <RefreshCw className={`size-3.5 ${isVerifyingMidtrans ? "animate-spin" : ""}`} />
-                {isVerifyingMidtrans ? "Memeriksa..." : "Cek Status Pembayaran"}
+                <RefreshCw className={`size-4 shrink-0 ${isVerifyingMidtrans ? "animate-spin" : ""}`} />
+                <span>{isVerifyingMidtrans ? "Memeriksa..." : "Cek Status Pembayaran"}</span>
               </Button>
             </div>
           ) : (
@@ -984,22 +968,22 @@ function PaymentModalContent({
               size="default"
               disabled={isSubmitting || midtransWaiting || payAmount <= 0}
               onClick={handleOpenMidtransSnap}
-              className="h-10 px-5 text-xs sm:text-sm font-bold bg-primary text-primary-foreground shadow-sm rounded-xl gap-2 hover:bg-primary/90"
+              className="h-11 px-6 text-xs sm:text-sm font-bold bg-primary text-primary-foreground shadow-sm rounded-xl gap-2 hover:bg-primary/90 w-full sm:w-auto"
             >
               {isSubmitting ? (
                 <>
-                  <Loader2 className="size-4 animate-spin" />
-                  Membuka Snap...
+                  <Loader2 className="size-4 animate-spin shrink-0" />
+                  <span>Membuka Snap...</span>
                 </>
               ) : midtransWaiting ? (
                 <>
-                  <Loader2 className="size-4 animate-spin" />
-                  Snap Sedang Aktif...
+                  <Loader2 className="size-4 animate-spin shrink-0" />
+                  <span>Snap Sedang Aktif...</span>
                 </>
               ) : (
                 <>
-                  <ExternalLink className="size-4" />
-                  Buka Midtrans Snap ({formatRupiah(payAmount)})
+                  <ExternalLink className="size-4 shrink-0" />
+                  <span>Buka Midtrans Snap ({formatRupiah(payAmount)})</span>
                 </>
               )}
             </Button>
@@ -1015,17 +999,17 @@ function PaymentModalContent({
               (method === "cash" && isCashDeficit)
             }
             onClick={handleProcessManualPayment}
-            className="h-10 px-5 text-xs sm:text-sm font-bold bg-primary text-primary-foreground shadow-sm rounded-xl gap-2 hover:bg-primary/90"
+            className="h-11 px-6 text-xs sm:text-sm font-bold bg-primary text-primary-foreground shadow-sm rounded-xl gap-2 hover:bg-primary/90 w-full sm:w-auto"
           >
             {isSubmitting ? (
               <>
-                <Loader2 className="size-4 animate-spin" />
-                Memproses Pembayaran...
+                <Loader2 className="size-4 animate-spin shrink-0" />
+                <span>Memproses Pembayaran...</span>
               </>
             ) : (
               <>
-                <CheckCircle className="size-4" />
-                Bayar Sekarang ({formatRupiah(payAmount)})
+                <CheckCircle className="size-4 shrink-0" />
+                <span>Bayar Sekarang ({formatRupiah(payAmount)})</span>
               </>
             )}
           </Button>

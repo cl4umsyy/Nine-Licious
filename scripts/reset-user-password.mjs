@@ -36,7 +36,7 @@ const isProduction =
   args.includes("production") ||
   args.includes("--production");
 
-const { loadedEnvFiles } = loadEnvConfig(process.cwd(), !isProduction);
+loadEnvConfig(process.cwd(), !isProduction);
 
 const setupEnvPath = resolve(process.cwd(), ".env.setup.local");
 

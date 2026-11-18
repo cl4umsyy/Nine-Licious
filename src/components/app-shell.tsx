@@ -65,6 +65,7 @@ function SidebarContent({
 }) {
   const pathname = usePathname();
   const items = navItemsForRole(profile.role);
+  const activeHref = pageMetaForPath(pathname)?.href;
 
   return (
     <div className="flex h-full flex-col">
@@ -77,9 +78,7 @@ function SidebarContent({
           Menu kerja
         </p>
         {items.map((item) => {
-          const active =
-            pathname === item.href ||
-            pathname.startsWith(`${item.href}/`);
+          const active = activeHref === item.href;
 
           return (
             <Link
@@ -138,6 +137,7 @@ export function AppShell({ profile, environment, children }: AppShellProps) {
     meta?.label ??
     (pathname === "/unauthorized" ? "Akses dibatasi" : "Nine Licious");
   const isPosPage = pathname === "/pos";
+  const isKitchenPage = pathname === "/kitchen";
 
   return (
     <div
@@ -271,6 +271,8 @@ export function AppShell({ profile, environment, children }: AppShellProps) {
               "mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8 lg:py-8",
               isPosPage &&
                 "flex flex-col flex-1 min-h-0 py-2.5 px-3 sm:px-4 lg:px-6 lg:py-3 max-w-[1920px]",
+              isKitchenPage &&
+                "max-w-[1920px] px-4 py-4 sm:px-6 lg:px-6 lg:py-5",
             )}
           >
             {children}

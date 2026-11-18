@@ -21,7 +21,19 @@ import type { CreateSnapTransactionResult } from "@/lib/midtrans/types";
 import type { MidtransSplitBillType } from "@/types/database";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import type { Order } from "@/types/database";
+import {
+  formatSafeReceiptError,
+  normalizeReceiptWidth,
+} from "@/lib/payments/receipt";
+import type {
+  Order,
+  OrderDiscount,
+  OrderItem,
+  OrderItemModifier,
+  Payment,
+  Refund,
+  RestaurantSettings,
+} from "@/types/database";
 
 function formatSafePaymentError(rawMessage?: string): string {
   if (!rawMessage) return "Gagal memproses pembayaran di sistem kasir.";
@@ -323,7 +335,244 @@ export async function confirmMidtransRefundAction(rawInput: {
 }
 
 /**
+ * Fallback read-only builder untuk data struk ketika RPC `get_order_receipt_data`
+ * mengalami error (mis. bug PL/pgSQL `record "v_table" is not assigned yet` pada
+ * pesanan Takeaway dimana `table_id IS NULL`).
+ *
+ * Strictly READ-ONLY: tidak pernah membuat atau mengubah transaksi pembayaran.
+ */
+async function buildOrderReceiptDataFallback(
+  supabase: NonNullable<Awaited<ReturnType<typeof createSupabaseServerClient>>>,
+  orderId: string,
+): Promise<ReceiptData | null> {
+  const { data: order, error: orderErr } = await supabase
+    .from("orders")
+    .select("*")
+    .eq("id", orderId)
+    .maybeSingle<Order>();
+
+  if (orderErr || !order) {
+    return null;
+  }
+
+  const [
+    settingsRes,
+    tableRes,
+    itemsRes,
+    discountsRes,
+    paymentsRes,
+    refundsRes,
+  ] = await Promise.all([
+    supabase
+      .from("restaurant_settings")
+      .select("name, address, phone, logo_url, receipt_header, receipt_footer, receipt_width")
+      .eq("id", 1)
+      .maybeSingle<
+        Pick<
+          RestaurantSettings,
+          | "name"
+          | "address"
+          | "phone"
+          | "logo_url"
+          | "receipt_header"
+          | "receipt_footer"
+          | "receipt_width"
+        >
+      >(),
+    order.table_id
+      ? supabase
+          .from("dining_tables")
+          .select("name")
+          .eq("id", order.table_id)
+          .maybeSingle<{ name: string }>()
+      : Promise.resolve({ data: null as { name: string } | null, error: null }),
+    supabase
+      .from("order_items")
+      .select("*")
+      .eq("order_id", orderId)
+      .order("created_at", { ascending: true }),
+    supabase
+      .from("order_discounts")
+      .select("*")
+      .eq("order_id", orderId)
+      .order("created_at", { ascending: true }),
+    supabase
+      .from("payments")
+      .select("*")
+      .eq("order_id", orderId)
+      .order("created_at", { ascending: true }),
+    supabase
+      .from("refunds")
+      .select("*")
+      .eq("order_id", orderId)
+      .order("created_at", { ascending: true }),
+  ]);
+
+  const items = (itemsRes.data ?? []) as OrderItem[];
+  const discounts = (discountsRes.data ?? []) as OrderDiscount[];
+  const payments = (paymentsRes.data ?? []) as Payment[];
+  const refunds = (refundsRes.data ?? []) as Refund[];
+
+  const itemIds = items.map((item) => item.id);
+  let modifiers: OrderItemModifier[] = [];
+  if (itemIds.length > 0) {
+    const { data: modRows } = await supabase
+      .from("order_item_modifiers")
+      .select("*")
+      .in("order_item_id", itemIds)
+      .order("created_at", { ascending: true });
+    modifiers = (modRows ?? []) as OrderItemModifier[];
+  }
+
+  // Ambil nama staf (pembuat pesanan / approver diskon / approver refund) secara read-only
+  const profileIds = Array.from(
+    new Set(
+      [
+        order.created_by,
+        ...discounts.map((d) => d.approved_by),
+        ...refunds.map((r) => r.approved_by),
+      ].filter((id): id is string => Boolean(id)),
+    ),
+  );
+
+  const profileNames = new Map<string, string>();
+  if (profileIds.length > 0) {
+    const profileClient = createSupabaseAdminClient() ?? supabase;
+    const { data: profileRows } = await profileClient
+      .from("profiles")
+      .select("id, full_name")
+      .in("id", profileIds);
+    for (const row of (profileRows ?? []) as Array<{
+      id: string;
+      full_name: string;
+    }>) {
+      profileNames.set(row.id, row.full_name);
+    }
+  }
+
+  const modifiersByItem = new Map<
+    string,
+    Array<{ group_name: string; option_name: string; price_delta: number }>
+  >();
+  for (const mod of modifiers) {
+    const arr = modifiersByItem.get(mod.order_item_id) ?? [];
+    arr.push({
+      group_name: mod.group_name_snapshot,
+      option_name: mod.option_name_snapshot,
+      price_delta: Number(mod.price_delta_snapshot) || 0,
+    });
+    modifiersByItem.set(mod.order_item_id, arr);
+  }
+
+  const completedRefundTotal = refunds
+    .filter((r) => r.status === "completed")
+    .reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+  const pendingRefundTotal = refunds
+    .filter((r) => r.status === "pending")
+    .reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+
+  const settings = settingsRes.data;
+  const paidTotal = Number(order.paid_total) || 0;
+
+  return {
+    restaurant: {
+      name: settings?.name || "Nine Licious",
+      address: settings?.address ?? null,
+      phone: settings?.phone ?? null,
+      logo_url: settings?.logo_url ?? null,
+      receipt_header: settings?.receipt_header ?? null,
+      receipt_footer: settings?.receipt_footer ?? null,
+      receipt_width: normalizeReceiptWidth(settings?.receipt_width),
+    },
+    order: {
+      id: order.id,
+      order_number: order.order_number,
+      order_type: order.order_type,
+      table_name: tableRes.data?.name ?? null,
+      customer_name: order.customer_name ?? null,
+      status: order.status,
+      payment_status: order.payment_status,
+      queue_number: order.queue_number ?? null,
+      queue_date: order.queue_date ?? null,
+      cashier_name:
+        (order.created_by ? profileNames.get(order.created_by) : null) ??
+        "Kasir",
+      created_at: order.created_at,
+      subtotal: Number(order.subtotal) || 0,
+      discount_product_total: Number(order.discount_product_total) || 0,
+      discount_order_total: Number(order.discount_order_total) || 0,
+      discount_manual_total: Number(order.discount_manual_total) || 0,
+      discount_total: Number(order.discount_total) || 0,
+      tax_percent: Number(order.tax_percent) || 0,
+      tax_total: Number(order.tax_total) || 0,
+      service_charge_percent: Number(order.service_charge_percent) || 0,
+      service_total: Number(order.service_total) || 0,
+      grand_total: Number(order.grand_total) || 0,
+      paid_total: paidTotal,
+      refunded_total: completedRefundTotal,
+      pending_refund_total: pendingRefundTotal,
+      net_paid: paidTotal - completedRefundTotal,
+    },
+    items: items.map((item) => ({
+      id: item.id,
+      product_id: item.product_id,
+      product_name: item.product_name_snapshot,
+      product_sku: item.product_sku_snapshot,
+      unit_price: Number(item.unit_price_snapshot) || 0,
+      quantity: Number(item.quantity) || 0,
+      notes: item.notes ?? null,
+      modifier_total: Number(item.modifier_total) || 0,
+      subtotal: Number(item.subtotal) || 0,
+      discount_amount: Number(item.discount_amount) || 0,
+      line_total: Number(item.line_total) || 0,
+      kitchen_station: item.kitchen_station ?? null,
+      modifiers: modifiersByItem.get(item.id) ?? [],
+    })),
+    discounts: discounts.map((d) => ({
+      id: d.id,
+      name: d.name,
+      scope: d.scope,
+      discount_type: d.discount_type,
+      discount_rate: Number(d.discount_rate) || 0,
+      discount_amount: Number(d.discount_amount) || 0,
+      reason: d.reason ?? null,
+      approved_by: d.approved_by ?? null,
+      approved_at: d.approved_at ?? null,
+      approver_name: d.approved_by
+        ? (profileNames.get(d.approved_by) ?? null)
+        : null,
+    })),
+    payments: payments.map((p) => ({
+      id: p.id,
+      payment_method: p.payment_method,
+      payment_source: p.payment_source,
+      amount: Number(p.amount) || 0,
+      cash_received: p.cash_received !== null ? Number(p.cash_received) : null,
+      change_amount: Number(p.change_amount) || 0,
+      payment_status: p.payment_status,
+      reference_number: p.reference_number ?? null,
+      created_at: p.created_at,
+    })),
+    refunds: refunds.map((r) => ({
+      id: r.id,
+      refund_number: r.refund_number,
+      gateway_refund_id: r.gateway_refund_id ?? null,
+      refund_type: r.refund_type,
+      refund_method: r.refund_method,
+      amount: Number(r.amount) || 0,
+      reason: r.reason,
+      status: r.status,
+      created_at: r.created_at,
+      approver_name: r.approved_by
+        ? (profileNames.get(r.approved_by) ?? null)
+        : null,
+    })),
+  };
+}
+
+/**
  * Mengambil data struk pesanan digital (58mm/80mm) yang tervalidasi untuk kasir dan admin.
+ * Strictly read-only — tidak pernah membuat pembayaran baru atau mengubah status pesanan.
  */
 export async function getOrderReceiptDataAction(
   orderId: string,
@@ -350,24 +599,50 @@ export async function getOrderReceiptDataAction(
     },
   );
 
-  if (rpcErr) {
+  if (!rpcErr && rpcResult) {
     return {
-      ok: false,
-      message: formatSafePaymentError(rpcErr.message),
+      ok: true,
+      message: "Data struk berhasil dimuat.",
+      data: rpcResult as unknown as ReceiptData,
     };
   }
 
-  if (!rpcResult) {
+  // Jika RPC gagal (mis. `55000: record "v_table" is not assigned yet` pada pesanan Takeaway),
+  // gunakan fallback read-only langsung dari tabel agar struk tetap tampil tanpa error palsu.
+  if (rpcErr) {
+    console.warn(
+      "[receipt] RPC get_order_receipt_data fallback dipicu:",
+      rpcErr.code,
+      rpcErr.message,
+    );
+  }
+
+  try {
+    const fallbackData = await buildOrderReceiptDataFallback(supabase, orderId);
+    if (fallbackData) {
+      return {
+        ok: true,
+        message: "Data struk berhasil dimuat.",
+        data: fallbackData,
+      };
+    }
+  } catch (fallbackErr: unknown) {
+    console.error(
+      "[receipt] Gagal memuat fallback data struk:",
+      fallbackErr instanceof Error ? fallbackErr.message : fallbackErr,
+    );
+  }
+
+  if (rpcErr) {
     return {
       ok: false,
-      message: "Data struk pesanan tidak ditemukan.",
+      message: formatSafeReceiptError(rpcErr.message),
     };
   }
 
   return {
-    ok: true,
-    message: "Data struk berhasil dimuat.",
-    data: rpcResult as unknown as ReceiptData,
+    ok: false,
+    message: "Data struk pesanan tidak ditemukan.",
   };
 }
 
@@ -572,7 +847,11 @@ export async function getOrderPaymentStatusAction(
       midtransStatus = reconcileResult.midtransStatus ?? null;
       reconciliationMessage = reconcileResult.message ?? null;
 
-      if (reconcileResult.isSettled) {
+      if (
+        reconcileResult.isSettled ||
+        reconcileResult.midtransStatus === "settlement" ||
+        reconcileResult.midtransStatus === "capture"
+      ) {
         // Ambil data pesanan segar setelah mutasi settlement atomik di PostgreSQL
         const { data: refreshedOrder } = await supabase
           .from("orders")
@@ -586,6 +865,13 @@ export async function getOrderPaymentStatusAction(
           currentPaidTotal = refreshedOrder.paid_total;
           currentStatus = refreshedOrder.status;
           currentPaymentStatus = refreshedOrder.payment_status;
+          order.queue_number = refreshedOrder.queue_number;
+        }
+
+        if (currentSettled) {
+          revalidatePath("/pos");
+          revalidatePath("/pos/orders");
+          revalidatePath("/kitchen");
         }
       }
     } else {

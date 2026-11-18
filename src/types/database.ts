@@ -212,6 +212,8 @@ export type Order = {
   cancelled_by: string | null;
   cancelled_at: string | null;
   cancel_reason: string | null;
+  served_at?: string | null;
+  served_by?: string | null;
   notes: string | null;
   created_at: string;
   updated_at: string;
