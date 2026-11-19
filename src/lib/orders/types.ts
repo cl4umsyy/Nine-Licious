@@ -19,6 +19,9 @@ export type ProductModifierGroupWithDetails = ModifierGroup & {
 export type ProductWithModifiers = Product & {
   categoryName?: string;
   modifierGroups: ProductModifierGroupWithDetails[];
+  isStockAvailable?: boolean;
+  stockUnavailableReason?: string;
+  missingIngredientName?: string;
 };
 
 export type CartItemModifier = {

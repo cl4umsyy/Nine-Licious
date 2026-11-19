@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { requireRole } from "@/lib/auth/guards";
 import { ROLE_LABELS } from "@/lib/auth/roles";
+import { checkAllProductsStockAvailability } from "@/lib/orders/inventory-validation";
 import type { PendingServingBoardData } from "@/lib/orders/serving";
 import { getPendingServingOrdersAction } from "@/lib/orders/serving-actions";
 import type {
@@ -167,6 +168,11 @@ export default async function PosPage() {
           categoryMap.set(c.id, c.name);
         }
 
+        const stockAvailabilityMap = await checkAllProductsStockAvailability(
+          supabase,
+          rawProducts.map((p) => p.id),
+        );
+
         productsWithModifiers = rawProducts.map((p) => {
           const applicableGroupIds = groupsByProduct.get(p.id) ?? [];
           const detailedGroups: ProductModifierGroupWithDetails[] = [];
@@ -181,10 +187,15 @@ export default async function PosPage() {
             }
           }
 
+          const stockInfo = stockAvailabilityMap.get(p.id);
+
           return {
             ...p,
             categoryName: categoryMap.get(p.category_id),
             modifierGroups: detailedGroups,
+            isStockAvailable: stockInfo?.isAvailable ?? true,
+            stockUnavailableReason: stockInfo?.unavailableReason,
+            missingIngredientName: stockInfo?.missingIngredientName,
           };
         });
       }

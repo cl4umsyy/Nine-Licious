@@ -1,6 +1,8 @@
 import Link from "next/link";
 import {
+  AlertTriangle,
   ArrowRight,
+  Boxes,
   ChefHat,
   CircleCheck,
   Clock3,
@@ -32,6 +34,13 @@ import { requireRole } from "@/lib/auth/guards";
 import { ROLE_LABELS } from "@/lib/auth/roles";
 import { APP_ENVIRONMENT_LABELS } from "@/lib/constants";
 import { getAppEnvironment, getSessionIdleMinutes } from "@/lib/env";
+import {
+  buildLowStockAlerts,
+  formatStockQuantity,
+  roundQuantity3,
+} from "@/lib/inventory/calculations";
+import type { IngredientUnit } from "@/lib/inventory/constants";
+import type { LowStockAlert } from "@/lib/inventory/types";
 import { getMidtransConfigState } from "@/lib/midtrans/config";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
@@ -46,18 +55,35 @@ type SettingsSummary = {
   service_charge_percent: number;
 };
 
+type RawIngredientSummary = {
+  id: string;
+  name: string;
+  sku: string | null;
+  unit: IngredientUnit;
+  current_stock: number | string;
+  min_stock: number | string;
+  is_active: boolean;
+};
+
 const PHASES = [
   { label: "F0 · Fondasi & autentikasi", status: "selesai" },
-  { label: "F1 · Menu, meja, dan POS", status: "berikutnya" },
-  { label: "F2 · Pembayaran & struk", status: "rencana" },
-  { label: "F3 · Dapur & antrean", status: "rencana" },
-  { label: "F4 · Stok & bahan baku", status: "rencana" },
+  { label: "F1 · Menu, meja, dan POS", status: "selesai" },
+  { label: "F2 · Pembayaran & struk", status: "selesai" },
+  { label: "F3 · KDS & penyajian pesanan", status: "selesai" },
+  { label: "F4 · Stok & bahan baku", status: "berjalan" },
   { label: "F5 · Shift & kas", status: "rencana" },
   { label: "F6 · Laporan & audit lanjutan", status: "rencana" },
 ];
 
 function greeting(): string {
-  const hour = new Date().getHours();
+  const parts = new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    hour12: false,
+    timeZone: "Asia/Jakarta",
+  }).formatToParts(new Date());
+
+  const hourStr = parts.find((p) => p.type === "hour")?.value ?? "12";
+  const hour = parseInt(hourStr, 10);
 
   if (hour < 11) return "Selamat pagi";
   if (hour < 15) return "Selamat siang";
@@ -78,16 +104,24 @@ export default async function AdminDashboardPage() {
   let profiles: ProfileSummary[] = [];
   let settings: SettingsSummary | null = null;
   let dataIssue: string | null = null;
+  let inventoryMigrationPending = false;
+  let activeIngredientCount = 0;
+  let lowStockAlerts: LowStockAlert[] = [];
 
   if (supabase) {
-    const [profilesResult, settingsResult] = await Promise.all([
-      supabase.from("profiles").select("role, is_active"),
-      supabase
-        .from("restaurant_settings")
-        .select("name, tax_percent, service_charge_percent")
-        .eq("id", 1)
-        .maybeSingle<SettingsSummary>(),
-    ]);
+    const [profilesResult, settingsResult, ingredientsResult] =
+      await Promise.all([
+        supabase.from("profiles").select("role, is_active"),
+        supabase
+          .from("restaurant_settings")
+          .select("name, tax_percent, service_charge_percent")
+          .eq("id", 1)
+          .maybeSingle<SettingsSummary>(),
+        supabase
+          .from("ingredients")
+          .select("id, name, sku, unit, current_stock, min_stock, is_active")
+          .eq("is_active", true),
+      ]);
 
     if (profilesResult.error) {
       dataIssue =
@@ -102,6 +136,29 @@ export default async function AdminDashboardPage() {
         "Pengaturan restoran belum dapat dibaca. Jalankan migrasi database.";
     } else {
       settings = settingsResult.data ?? null;
+    }
+
+    if (ingredientsResult.error) {
+      const code = (ingredientsResult.error.code ?? "").trim();
+      const msg = ingredientsResult.error.message ?? "";
+      if (
+        code === "PGRST205" ||
+        code === "42P01" ||
+        msg.includes("Could not find the table") ||
+        msg.includes("does not exist")
+      ) {
+        inventoryMigrationPending = true;
+      }
+    } else {
+      const activeIngredients = (
+        (ingredientsResult.data ?? []) as RawIngredientSummary[]
+      ).map((row) => ({
+        ...row,
+        current_stock: roundQuantity3(row.current_stock),
+        min_stock: roundQuantity3(row.min_stock),
+      }));
+      activeIngredientCount = activeIngredients.length;
+      lowStockAlerts = buildLowStockAlerts(activeIngredients);
     }
   }
 
@@ -121,6 +178,7 @@ export default async function AdminDashboardPage() {
     day: "numeric",
     month: "long",
     year: "numeric",
+    timeZone: "Asia/Jakarta",
   }).format(new Date());
 
   const firstName = session.profile.full_name.split(" ")[0] ?? "Admin";
@@ -166,15 +224,16 @@ export default async function AdminDashboardPage() {
               className="border-primary-foreground/15 bg-primary-foreground/10 text-primary-foreground"
             >
               <CircleCheck />
-              F0 · Fondasi selesai
+              F4 · Stok &amp; Bahan Baku Aktif
             </Badge>
             <h2 className="mt-3 font-display text-2xl font-semibold tracking-[-0.02em]">
-              Fondasi autentikasi dan peran sudah aktif.
+              Operasional POS, Dapur, dan Inventori Nine Licious.
             </h2>
-            <p className="mt-1.5 text-sm leading-relaxed text-primary-foreground/70">
-              Login, pembatasan percobaan masuk, sesi idle, audit log, dan
-              pengelolaan pengguna sudah berjalan. Modul transaksi dimulai pada
-              F1.
+            <p className="mt-1.5 text-sm leading-relaxed text-primary-foreground/75">
+              Fondasi F0, katalog menu &amp; denah meja F1, pembayaran Tunai
+              &amp; Midtrans F2, serta KDS &amp; konfirmasi penyajian F3 telah
+              aktif. Modul F4 menambahkan bahan baku, resep produk, penyesuaian
+              stok beraudit, dan laporan pemakaian.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -185,9 +244,15 @@ export default async function AdminDashboardPage() {
               </Link>
             </Button>
             <Button asChild variant="secondary" size="sm">
+              <Link href="/admin/inventory">
+                <Boxes />
+                Stok &amp; resep
+              </Link>
+            </Button>
+            <Button asChild variant="secondary" size="sm">
               <Link href="/admin/tables">
                 <MapPin />
-                Kelola meja & denah
+                Kelola meja &amp; denah
               </Link>
             </Button>
             <Button asChild variant="secondary" size="sm">
@@ -214,6 +279,97 @@ export default async function AdminDashboardPage() {
               </Link>
             </Button>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Kartu Ringkasan Stok Rendah F4 */}
+      <Card
+        className={
+          !inventoryMigrationPending && lowStockAlerts.length > 0
+            ? "border-amber-500/45 bg-amber-500/5"
+            : undefined
+        }
+      >
+        <CardContent className="flex flex-col gap-4 py-5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="flex size-8 items-center justify-center rounded-lg bg-brand-soft text-primary">
+                {inventoryMigrationPending ? (
+                  <Database className="size-4" />
+                ) : lowStockAlerts.length > 0 ? (
+                  <AlertTriangle className="size-4 text-amber-600" />
+                ) : (
+                  <Boxes className="size-4" />
+                )}
+              </span>
+              <h3 className="font-display text-base font-semibold text-foreground">
+                Ringkasan Stok Bahan Baku
+              </h3>
+              {inventoryMigrationPending ? (
+                <Badge variant="outline">Menunggu Migrasi F4.1</Badge>
+              ) : lowStockAlerts.length > 0 ? (
+                <Badge variant="destructive">
+                  {lowStockAlerts.length} Perlu Perhatian
+                </Badge>
+              ) : (
+                <Badge variant="secondary">Stok Aman</Badge>
+              )}
+            </div>
+
+            {inventoryMigrationPending ? (
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Tabel inventori F4 belum aktif di Supabase. Jalankan migrasi{" "}
+                <code>20261119000100_f4_inventory_stock.sql</code> untuk mulai
+                memantau peringatan stok rendah dan pengurangan stok otomatis.
+              </p>
+            ) : lowStockAlerts.length === 0 ? (
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                {activeIngredientCount === 0
+                  ? "Belum ada bahan baku aktif terdaftar. Tambahkan master bahan baku dan resep di halaman Stok & Resep."
+                  : `Seluruh ${activeIngredientCount} bahan baku aktif berada di atas batas minimum stok.`}
+              </p>
+            ) : (
+              <div className="space-y-1.5">
+                <p className="text-xs text-muted-foreground">
+                  {
+                    lowStockAlerts.filter((a) => a.status === "out_of_stock")
+                      .length
+                  }{" "}
+                  bahan habis/kritis dan{" "}
+                  {
+                    lowStockAlerts.filter((a) => a.status === "low_stock")
+                      .length
+                  }{" "}
+                  bahan stok rendah dari {activeIngredientCount} bahan baku
+                  aktif.
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {lowStockAlerts.slice(0, 3).map((item) => (
+                    <Badge
+                      key={item.ingredient_id}
+                      variant={
+                        item.status === "out_of_stock"
+                          ? "destructive"
+                          : "outline"
+                      }
+                      className="text-[11px]"
+                    >
+                      {item.ingredient_name}:{" "}
+                      {formatStockQuantity(item.current_stock, item.unit)}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <Button asChild variant="outline" size="sm" className="shrink-0">
+            <Link href="/admin/inventory">
+              <Boxes />
+              Kelola Stok &amp; Resep
+              <ArrowRight />
+            </Link>
+          </Button>
         </CardContent>
       </Card>
 
@@ -353,7 +509,7 @@ export default async function AdminDashboardPage() {
                     className={
                       phase.status === "selesai"
                         ? "size-2 rounded-full bg-success"
-                        : phase.status === "berikutnya"
+                        : phase.status === "berjalan"
                           ? "size-2 rounded-full bg-brand-accent"
                           : "size-2 rounded-full bg-border"
                     }
@@ -398,7 +554,7 @@ export default async function AdminDashboardPage() {
             </p>
           </div>
           <Badge variant="outline" className="shrink-0">
-            F0 stabil
+            F0–F3 stabil · F4 berjalan
           </Badge>
         </CardContent>
       </Card>

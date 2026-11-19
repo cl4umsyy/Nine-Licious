@@ -162,6 +162,51 @@ export async function processPosManualPaymentAction(
     };
   }
 
+  // 4b. Pastikan stok bahan baku pesanan sudah tereservasi aman sebelum eksekusi pembayaran manual
+  const { data: activeRes, error: resErr } = await supabase
+    .from("ingredient_reservations")
+    .select("id")
+    .eq("order_id", order.id)
+    .eq("status", "active");
+
+  if (!resErr && (!activeRes || activeRes.length === 0)) {
+    const { data: orderItems } = await supabase
+      .from("order_items")
+      .select("product_id, quantity")
+      .eq("order_id", order.id);
+
+    if (orderItems && orderItems.length > 0) {
+      const { validateOrderInventoryAvailability } = await import(
+        "@/lib/orders/inventory-validation"
+      );
+      const stockCheck = await validateOrderInventoryAvailability(
+        supabase,
+        orderItems.map((item) => ({
+          productId: item.product_id,
+          quantity: item.quantity,
+        })),
+      );
+
+      if (!stockCheck.ok) {
+        return {
+          ok: false,
+          message: `Pembayaran tunai tidak dapat diproses: ${stockCheck.message}`,
+        };
+      }
+
+      const { error: reserveErr } = await supabase.rpc(
+        "reserve_order_stock_internal",
+        { p_order_id: order.id },
+      );
+      if (reserveErr) {
+        return {
+          ok: false,
+          message: `Gagal mengamankan stok sebelum pemrosesan pembayaran: ${reserveErr.message}`,
+        };
+      }
+    }
+  }
+
   // 5. Eksekusi RPC Atomik process_pos_payment_manual
   const { data: rpcResult, error: rpcErr } = await supabase.rpc(
     "process_pos_payment_manual",
@@ -738,6 +783,51 @@ export async function createPosMidtransSnapAction(
       ok: false,
       message: `Nominal transaksi (Rp ${input.grossAmount.toLocaleString("id-ID")}) melebihi sisa tagihan (Rp ${remainingBalance.toLocaleString("id-ID")}).`,
     };
+  }
+
+  // 4b. Pastikan stok bahan baku pesanan sudah tereservasi aman sebelum membuat Snap Midtrans
+  const { data: activeRes, error: resErr } = await supabase
+    .from("ingredient_reservations")
+    .select("id")
+    .eq("order_id", order.id)
+    .eq("status", "active");
+
+  if (!resErr && (!activeRes || activeRes.length === 0)) {
+    const { data: orderItems } = await supabase
+      .from("order_items")
+      .select("product_id, quantity")
+      .eq("order_id", order.id);
+
+    if (orderItems && orderItems.length > 0) {
+      const { validateOrderInventoryAvailability } = await import(
+        "@/lib/orders/inventory-validation"
+      );
+      const stockCheck = await validateOrderInventoryAvailability(
+        supabase,
+        orderItems.map((item) => ({
+          productId: item.product_id,
+          quantity: item.quantity,
+        })),
+      );
+
+      if (!stockCheck.ok) {
+        return {
+          ok: false,
+          message: `Transaksi pembayaran Midtrans tidak dapat diproses: ${stockCheck.message}`,
+        };
+      }
+
+      const { error: reserveErr } = await supabase.rpc(
+        "reserve_order_stock_internal",
+        { p_order_id: order.id },
+      );
+      if (reserveErr) {
+        return {
+          ok: false,
+          message: `Gagal mengamankan kuota stok sebelum membuat pembayaran online: ${reserveErr.message}`,
+        };
+      }
+    }
   }
 
   // 5. Eksekusi Service Midtrans Snap di Server-Side

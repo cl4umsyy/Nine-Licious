@@ -179,6 +179,14 @@ export function PosContainer({
 
   // Handle selecting a product from catalog
   const handleSelectProduct = (product: ProductWithModifiers) => {
+    if (product.isStockAvailable === false) {
+      toast.error(
+        product.stockUnavailableReason ||
+          `Bahan baku untuk "${product.name}" habis atau tidak mencukupi.`,
+      );
+      return;
+    }
+
     const activeModifiers = product.modifierGroups.filter((g) => g.is_active);
 
     // If product has active modifier groups, open the modifier modal

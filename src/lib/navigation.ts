@@ -1,4 +1,5 @@
 import {
+  Boxes,
   ChefHat,
   ClipboardList,
   LayoutDashboard,
@@ -34,6 +35,13 @@ export const NAV_ITEMS: NavItem[] = [
     label: "Menu",
     description: "Kategori, produk, modifier, dan ketersediaan.",
     icon: UtensilsCrossed,
+    roles: ["admin"],
+  },
+  {
+    href: "/admin/inventory",
+    label: "Stok & Resep",
+    description: "Bahan baku, resep produk, penyesuaian stok, dan laporan pemakaian.",
+    icon: Boxes,
     roles: ["admin"],
   },
   {

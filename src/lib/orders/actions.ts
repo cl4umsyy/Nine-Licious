@@ -25,6 +25,7 @@ import {
   firstZodError,
   tableIdSchema,
 } from "@/lib/orders/validation";
+import { validateOrderInventoryAvailability } from "@/lib/orders/inventory-validation";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import type {
@@ -329,6 +330,19 @@ export async function createPosOrderAction(
         };
       }
     }
+  }
+
+  // 5b. Validasi Ketersediaan Bahan Baku & Stok Tersedia Server-Side (F4.4)
+  const inventoryCheck = await validateOrderInventoryAvailability(
+    context.supabase,
+    input.items.map((i) => ({ productId: i.productId, quantity: i.quantity })),
+  );
+
+  if (!inventoryCheck.ok) {
+    return {
+      ok: false,
+      message: inventoryCheck.message,
+    };
   }
 
   // 6. Validasi Meja & Kunjungan Dine-in (F2.3)
@@ -851,6 +865,19 @@ export async function appendOrderItemsAction(
         };
       }
     }
+  }
+
+  // 3b. Validasi Ketersediaan Bahan Baku Tambahan Server-Side (F4.4)
+  const inventoryCheck = await validateOrderInventoryAvailability(
+    context.supabase,
+    input.items.map((i) => ({ productId: i.productId, quantity: i.quantity })),
+  );
+
+  if (!inventoryCheck.ok) {
+    return {
+      ok: false,
+      message: inventoryCheck.message,
+    };
   }
 
   // 4. Hitung Delta Subtotal, Pajak, Service Charge, Grand Total

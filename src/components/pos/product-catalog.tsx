@@ -144,7 +144,8 @@ export function ProductCatalog({
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {filteredProducts.map((product) => {
-              const isAvailable = product.is_available;
+              const isStockDepleted = product.isStockAvailable === false;
+              const isAvailable = product.is_available && !isStockDepleted;
               const hasModifiers = product.modifierGroups.length > 0;
 
               return (
@@ -153,6 +154,12 @@ export function ProductCatalog({
                   type="button"
                   disabled={!isAvailable}
                   onClick={() => onSelectProduct(product)}
+                  title={
+                    product.stockUnavailableReason ||
+                    (!product.is_available
+                      ? "Produk sedang tidak tersedia"
+                      : undefined)
+                  }
                   className={`group relative flex flex-col overflow-hidden rounded-2xl border border-border/75 text-left bg-card shadow-2xs transition-all ${
                     isAvailable
                       ? "hover:border-primary/50 hover:shadow-md cursor-pointer active:scale-[0.985]"
@@ -177,13 +184,18 @@ export function ProductCatalog({
 
                     {/* Availability Overlay */}
                     {!isAvailable && (
-                      <div className="absolute inset-0 bg-background/80 backdrop-blur-[2px] flex items-center justify-center p-2 text-center">
+                      <div className="absolute inset-0 bg-background/85 backdrop-blur-[2px] flex flex-col items-center justify-center p-2 text-center gap-1">
                         <Badge
                           variant="destructive"
                           className="text-[10px] uppercase font-bold"
                         >
                           Habis
                         </Badge>
+                        {isStockDepleted && product.missingIngredientName ? (
+                          <span className="text-[10px] font-medium text-destructive leading-tight line-clamp-2 px-1">
+                            Bahan {product.missingIngredientName} habis
+                          </span>
+                        ) : null}
                       </div>
                     )}
 
