@@ -2,6 +2,7 @@ import Link from "next/link";
 import {
   AlertTriangle,
   ArrowRight,
+  BarChart3,
   Boxes,
   ChefHat,
   CircleCheck,
@@ -259,6 +260,18 @@ export default async function AdminDashboardPage() {
               <Link href="/admin/discounts">
                 <Percent />
                 Kelola diskon
+              </Link>
+            </Button>
+            <Button asChild variant="secondary" size="sm">
+              <Link href="/admin/shifts">
+                <ReceiptText />
+                Shift &amp; kas
+              </Link>
+            </Button>
+            <Button asChild variant="secondary" size="sm">
+              <Link href="/admin/reports">
+                <BarChart3 />
+                Laporan
               </Link>
             </Button>
             <Button asChild variant="secondary" size="sm">

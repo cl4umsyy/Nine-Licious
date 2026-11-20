@@ -1,4 +1,5 @@
 import {
+  BarChart3,
   Boxes,
   ChefHat,
   ClipboardList,
@@ -64,6 +65,13 @@ export const NAV_ITEMS: NavItem[] = [
     label: "Shift & Kas",
     description: "Monitoring shift kasir aktif, mutasi laci, dan riwayat rekonsiliasi.",
     icon: Wallet,
+    roles: ["admin"],
+  },
+  {
+    href: "/admin/reports",
+    label: "Laporan",
+    description: "Analisis performa penjualan, metode pembayaran, dan produk terlaris.",
+    icon: BarChart3,
     roles: ["admin"],
   },
   {
