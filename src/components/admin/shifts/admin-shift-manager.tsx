@@ -3,14 +3,21 @@
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
+  ArrowDownCircle,
+  ArrowUpCircle,
+  CheckCircle2,
+  Clock,
   Eye,
+  Filter,
   History,
+  Loader2,
   PlusCircle,
   Receipt,
   Search,
   ShieldCheck,
   Users,
   Wallet,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -50,11 +57,13 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import {
   getCashMovementsAction,
+  getShiftSummaryAction,
   openShiftAction,
 } from "@/lib/shifts/actions";
 import type {
   CashMovement,
   CashMovementType,
+  ShiftSummary,
   ShiftWithCashier,
 } from "@/lib/shifts/types";
 
@@ -112,8 +121,12 @@ export function AdminShiftManager({
   cashiers,
 }: AdminShiftManagerProps) {
   const router = useRouter();
+
   // Filter states
   const [cashierFilter, setCashierFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "open" | "closed">("all");
+  const [dateFilter, setDateFilter] = useState<"all" | "today" | "7d" | "30d" | "custom">("all");
+  const [customDate, setCustomDate] = useState<string>("");
   const [searchQuery, setSearchQuery] = useState<string>("");
 
   // Modal Buka Shift atas nama kasir
@@ -122,11 +135,12 @@ export function AdminShiftManager({
   const [openingCashInput, setOpeningCashInput] = useState<number>(200000);
   const [openingNotes, setOpeningNotes] = useState<string>("");
 
-  // Modal Detail Mutasi Kas
+  // Modal Detail Mutasi Kas & Audit Rekonsiliasi
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [selectedShiftForDetail, setSelectedShiftForDetail] = useState<ShiftWithCashier | null>(null);
+  const [selectedShiftSummary, setSelectedShiftSummary] = useState<ShiftSummary | null>(null);
   const [shiftMovements, setShiftMovements] = useState<CashMovement[]>([]);
-  const [isLoadingMovements, setIsLoadingMovements] = useState(false);
+  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
 
   const [isPending, startTransition] = useTransition();
 
@@ -144,21 +158,72 @@ export function AdminShiftManager({
   // Filter daftar riwayat shift
   const filteredShifts = useMemo(() => {
     return allShifts.filter((shift) => {
+      // 1. Kasir Filter
       if (cashierFilter !== "all" && shift.cashier_id !== cashierFilter) {
         return false;
       }
+
+      // 2. Status Filter
+      if (statusFilter !== "all" && shift.status !== statusFilter) {
+        return false;
+      }
+
+      // 3. Date Filter
+      if (dateFilter !== "all") {
+        const shiftDate = new Date(shift.opened_at);
+        const now = new Date();
+
+        if (dateFilter === "today") {
+          const isSameDay =
+            shiftDate.getFullYear() === now.getFullYear() &&
+            shiftDate.getMonth() === now.getMonth() &&
+            shiftDate.getDate() === now.getDate();
+          if (!isSameDay) return false;
+        } else if (dateFilter === "7d") {
+          const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+          if (shiftDate < sevenDaysAgo) return false;
+        } else if (dateFilter === "30d") {
+          const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+          if (shiftDate < thirtyDaysAgo) return false;
+        } else if (dateFilter === "custom" && customDate) {
+          const target = new Date(customDate);
+          const isSameDay =
+            shiftDate.getFullYear() === target.getFullYear() &&
+            shiftDate.getMonth() === target.getMonth() &&
+            shiftDate.getDate() === target.getDate();
+          if (!isSameDay) return false;
+        }
+      }
+
+      // 4. Search Query (nama kasir, username, catatan)
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const nameMatch = shift.cashier?.full_name?.toLowerCase().includes(q);
         const userMatch = shift.cashier?.username?.toLowerCase().includes(q);
         const notesMatch = shift.notes?.toLowerCase().includes(q);
-        return nameMatch || userMatch || notesMatch;
+        return Boolean(nameMatch || userMatch || notesMatch);
       }
+
       return true;
     });
-  }, [allShifts, cashierFilter, searchQuery]);
+  }, [allShifts, cashierFilter, statusFilter, dateFilter, customDate, searchQuery]);
 
-  // Handler Buka Shift atas nama kasir
+  const isFiltered =
+    cashierFilter !== "all" ||
+    statusFilter !== "all" ||
+    dateFilter !== "all" ||
+    customDate !== "" ||
+    searchQuery.trim() !== "";
+
+  const handleResetFilters = () => {
+    setCashierFilter("all");
+    setStatusFilter("all");
+    setDateFilter("all");
+    setCustomDate("");
+    setSearchQuery("");
+  };
+
+  // Handler Buka Shift atas nama kasir oleh Admin
   const handleOpenShiftByAdmin = () => {
     if (!selectedCashierId) {
       toast.error("Pilih kasir yang akan dibuka shift-nya.");
@@ -187,20 +252,32 @@ export function AdminShiftManager({
     });
   };
 
-  // Handler Lihat Detail Mutasi Kas
+  // Handler Lihat Detail Mutasi Kas & Audit Rekonsiliasi Shift
   const handleViewDetail = async (shift: ShiftWithCashier) => {
     setSelectedShiftForDetail(shift);
+    setSelectedShiftSummary(null);
     setIsDetailModalOpen(true);
-    setIsLoadingMovements(true);
+    setIsLoadingDetail(true);
 
-    const res = await getCashMovementsAction(shift.id);
-    if (res.ok && res.data) {
-      setShiftMovements(res.data);
+    const [movRes, sumRes] = await Promise.all([
+      getCashMovementsAction(shift.id),
+      getShiftSummaryAction(shift.id),
+    ]);
+
+    if (movRes.ok && movRes.data) {
+      setShiftMovements(movRes.data);
     } else {
-      toast.error(res.message || "Gagal memuat mutasi kas shift.");
+      toast.error(movRes.message || "Gagal memuat mutasi kas shift.");
       setShiftMovements([]);
     }
-    setIsLoadingMovements(false);
+
+    if (sumRes.ok && sumRes.data) {
+      setSelectedShiftSummary(sumRes.data);
+    } else {
+      setSelectedShiftSummary(null);
+    }
+
+    setIsLoadingDetail(false);
   };
 
   return (
@@ -250,7 +327,7 @@ export function AdminShiftManager({
               <History className="size-4 text-muted-foreground" />
             </CardDescription>
             <CardTitle className="text-2xl font-bold font-mono">
-              {allShifts.length} <span className="text-xs font-normal text-muted-foreground">Sesi Selesai</span>
+              {allShifts.length} <span className="text-xs font-normal text-muted-foreground">Sesi Tercatat</span>
             </CardTitle>
           </CardHeader>
         </Card>
@@ -350,7 +427,7 @@ export function AdminShiftManager({
                           className="h-8 px-2.5 text-xs font-semibold rounded-lg gap-1.5"
                         >
                           <Eye className="size-3.5" />
-                          <span>Mutasi Kas</span>
+                          <span>Detail &amp; Mutasi</span>
                         </Button>
                       </TableCell>
                     </TableRow>
@@ -375,24 +452,27 @@ export function AdminShiftManager({
                 Audit riwayat seluruh sesi kerja kasir, perbandingan uang fisik aktual vs sistem, dan catatan selisih
               </CardDescription>
             </div>
+            <div className="text-xs text-muted-foreground font-medium">
+              Menampilkan <strong>{filteredShifts.length}</strong> dari {allShifts.length} shift
+            </div>
           </div>
 
-          {/* Bar Filter */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 pt-1">
-            <div className="relative flex-1">
+          {/* Bar Filter Lengkap (Pencarian, Kasir, Status, Tanggal) */}
+          <div className="flex flex-wrap items-center gap-2.5 pt-1">
+            <div className="relative flex-1 min-w-[200px]">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
               <Input
-                placeholder="Cari nama kasir atau catatan..."
+                placeholder="Cari kasir atau catatan..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-9 h-8.5 text-xs rounded-xl"
               />
             </div>
 
-            <div className="w-full sm:w-56">
+            <div className="w-full sm:w-48">
               <Select value={cashierFilter} onValueChange={setCashierFilter}>
                 <SelectTrigger className="h-8.5 text-xs rounded-xl">
-                  <SelectValue placeholder="Filter Kasir" />
+                  <SelectValue placeholder="Semua Kasir" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Semua Kasir</SelectItem>
@@ -404,13 +484,85 @@ export function AdminShiftManager({
                 </SelectContent>
               </Select>
             </div>
+
+            <div className="w-full sm:w-36">
+              <Select
+                value={statusFilter}
+                onValueChange={(val) => setStatusFilter(val as "all" | "open" | "closed")}
+              >
+                <SelectTrigger className="h-8.5 text-xs rounded-xl">
+                  <SelectValue placeholder="Semua Status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Semua Status</SelectItem>
+                  <SelectItem value="open">Shift Aktif</SelectItem>
+                  <SelectItem value="closed">Shift Ditutup</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="w-full sm:w-40">
+              <Select
+                value={dateFilter}
+                onValueChange={(val) => {
+                  setDateFilter(val as "all" | "today" | "7d" | "30d" | "custom");
+                  if (val !== "custom") setCustomDate("");
+                }}
+              >
+                <SelectTrigger className="h-8.5 text-xs rounded-xl">
+                  <SelectValue placeholder="Semua Tanggal" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Semua Tanggal</SelectItem>
+                  <SelectItem value="today">Hari Ini</SelectItem>
+                  <SelectItem value="7d">7 Hari Terakhir</SelectItem>
+                  <SelectItem value="30d">30 Hari Terakhir</SelectItem>
+                  <SelectItem value="custom">Pilih Tanggal...</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {dateFilter === "custom" && (
+              <Input
+                type="date"
+                value={customDate}
+                onChange={(e) => setCustomDate(e.target.value)}
+                className="w-auto h-8.5 text-xs rounded-xl"
+              />
+            )}
+
+            {isFiltered && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleResetFilters}
+                className="h-8.5 px-2.5 text-xs font-semibold text-muted-foreground hover:text-foreground rounded-xl gap-1"
+              >
+                <X className="size-3.5" />
+                Reset
+              </Button>
+            )}
           </div>
         </CardHeader>
 
         <CardContent className="p-0">
           {filteredShifts.length === 0 ? (
-            <div className="p-8 text-center text-xs text-muted-foreground">
-              Tidak ada data shift yang cocok dengan filter.
+            <div className="p-10 text-center space-y-2">
+              <Filter className="size-8 text-muted-foreground/40 mx-auto" />
+              <p className="text-xs font-semibold text-foreground">Tidak ada data shift yang cocok.</p>
+              <p className="text-[11px] text-muted-foreground">
+                Coba sesuaikan kata kunci pencarian, filter kasir, status, atau rentang tanggal.
+              </p>
+              {isFiltered && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleResetFilters}
+                  className="h-8 text-xs font-semibold rounded-xl mt-2"
+                >
+                  Reset Semua Filter
+                </Button>
+              )}
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -445,7 +597,7 @@ export function AdminShiftManager({
                         <TableCell className="text-right font-mono font-bold">
                           {formatRupiah(shift.opening_cash)}
                         </TableCell>
-                        <TableCell className="text-right font-mono font-bold">
+                        <TableCell className="text-right font-mono font-bold text-primary">
                           {formatRupiah(shift.expected_cash)}
                         </TableCell>
                         <TableCell className="text-right font-mono font-bold">
@@ -454,14 +606,25 @@ export function AdminShiftManager({
                         <TableCell className="text-right font-mono">
                           {shift.status === "closed" ? (
                             diff === 0 ? (
-                              <span className="text-emerald-700 font-bold">Pas (Rp 0)</span>
+                              <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-300 font-bold gap-1 font-mono">
+                                <CheckCircle2 className="size-3 text-emerald-600" />
+                                Cocok (Pas)
+                              </Badge>
                             ) : diff > 0 ? (
-                              <span className="text-blue-700 font-bold">+{formatRupiah(diff)}</span>
+                              <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-300 font-bold gap-1 font-mono">
+                                <ArrowUpCircle className="size-3 text-blue-600" />
+                                Lebih (+{formatRupiah(diff)})
+                              </Badge>
                             ) : (
-                              <span className="text-rose-700 font-bold">-{formatRupiah(Math.abs(diff))}</span>
+                              <Badge variant="outline" className="bg-rose-50 text-rose-700 border-rose-300 font-bold gap-1 font-mono">
+                                <ArrowDownCircle className="size-3 text-rose-600" />
+                                Kurang (-{formatRupiah(Math.abs(diff))})
+                              </Badge>
                             )
                           ) : (
-                            "-"
+                            <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 font-medium">
+                              Shift Aktif
+                            </Badge>
                           )}
                         </TableCell>
                         <TableCell className="text-center">
@@ -483,7 +646,7 @@ export function AdminShiftManager({
                             className="h-8 px-2.5 text-xs font-semibold rounded-lg gap-1.5"
                           >
                             <Eye className="size-3.5" />
-                            <span>Mutasi</span>
+                            <span>Detail &amp; Mutasi</span>
                           </Button>
                         </TableCell>
                       </TableRow>
@@ -585,100 +748,265 @@ export function AdminShiftManager({
       </Dialog>
 
       {/* ========================================================================= */}
-      {/* DIALOG 2: DETAIL MUTASI KAS SHIFT */}
+      {/* DIALOG 2: AUDIT DETAIL SHIFT & REKONSILIASI KAS */}
       {/* ========================================================================= */}
       <Dialog open={isDetailModalOpen} onOpenChange={setIsDetailModalOpen}>
-        <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col p-0">
+        <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col p-0">
           <DialogHeader className="p-5 pb-3 border-b">
-            <DialogTitle className="text-base font-bold flex items-center gap-2">
-              <Receipt className="size-5 text-primary" />
-              Detail Mutasi Kas Shift
-            </DialogTitle>
-            <DialogDescription className="text-xs">
-              Kasir: <strong>{selectedShiftForDetail?.cashier?.full_name}</strong> (@{selectedShiftForDetail?.cashier?.username}) • Dibuka {selectedShiftForDetail && formatDate(selectedShiftForDetail.opened_at)}
-            </DialogDescription>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <DialogTitle className="text-base font-bold flex items-center gap-2">
+                  <Receipt className="size-5 text-primary" />
+                  Audit Detail Shift &amp; Rekonsiliasi Kas
+                </DialogTitle>
+                <DialogDescription className="text-xs mt-1">
+                  Kasir: <strong>{selectedShiftForDetail?.cashier?.full_name}</strong> (@{selectedShiftForDetail?.cashier?.username}) • ID Shift: <span className="font-mono text-[11px]">{selectedShiftForDetail?.id}</span>
+                </DialogDescription>
+              </div>
+              <div>
+                {selectedShiftForDetail?.status === "open" ? (
+                  <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-300 font-bold">
+                    Shift Aktif
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="bg-slate-100 text-slate-700 font-bold">
+                    Shift Selesai (Closed)
+                  </Badge>
+                )}
+              </div>
+            </div>
           </DialogHeader>
 
           <div className="p-5 space-y-4 flex-1 overflow-y-auto">
-            {/* Box Ringkasan Saldo Shift */}
-            <div className="grid grid-cols-3 gap-3 p-3.5 rounded-xl border bg-muted/20 text-xs">
-              <div>
-                <span className="text-muted-foreground block">Modal Awal</span>
-                <span className="font-mono font-bold text-sm">
-                  {formatRupiah(selectedShiftForDetail?.opening_cash ?? 0)}
-                </span>
+            {isLoadingDetail ? (
+              <div className="p-12 text-center space-y-2">
+                <Loader2 className="size-6 animate-spin text-primary mx-auto" />
+                <p className="text-xs text-muted-foreground">Memuat rincian finansial &amp; buku mutasi kas...</p>
               </div>
-              <div>
-                <span className="text-muted-foreground block">Expected Cash</span>
-                <span className="font-mono font-bold text-sm text-primary">
-                  {formatRupiah(selectedShiftForDetail?.expected_cash ?? 0)}
-                </span>
-              </div>
-              <div>
-                <span className="text-muted-foreground block">Fisik (Actual)</span>
-                <span className="font-mono font-bold text-sm">
-                  {selectedShiftForDetail?.actual_cash !== null
-                    ? formatRupiah(selectedShiftForDetail?.actual_cash ?? 0)
-                    : "- (Shift Aktif)"}
-                </span>
-              </div>
-            </div>
+            ) : (
+              <>
+                {/* 1. Rekonsiliasi Status Callout Banner */}
+                {selectedShiftForDetail?.status === "closed" ? (
+                  (selectedShiftForDetail?.cash_difference ?? 0) === 0 ? (
+                    <div className="flex items-start gap-3 p-3.5 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-900 text-xs">
+                      <CheckCircle2 className="size-5 text-emerald-600 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold text-sm text-emerald-800">Rekonsiliasi Sempurna: Cocok / Seimbang (Pas)</p>
+                        <p className="text-emerald-700 text-[11px] mt-0.5">
+                          Uang fisik aktual di laci kasir cocok persis dengan ekspektasi sistem tanpa ada selisih kas (Rp 0).
+                        </p>
+                      </div>
+                    </div>
+                  ) : (selectedShiftForDetail?.cash_difference ?? 0) > 0 ? (
+                    <div className="flex items-start gap-3 p-3.5 bg-blue-500/10 border border-blue-500/30 rounded-xl text-blue-900 text-xs">
+                      <ArrowUpCircle className="size-5 text-blue-600 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold text-sm text-blue-800">
+                          Rekonsiliasi Kas: Selisih Lebih / Surplus (+{formatRupiah(selectedShiftForDetail?.cash_difference ?? 0)})
+                        </p>
+                        <p className="text-blue-700 text-[11px] mt-0.5">
+                          Uang fisik di kasir tercatat lebih banyak daripada saldo ekspektasi sistem.
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-start gap-3 p-3.5 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-900 text-xs">
+                      <ArrowDownCircle className="size-5 text-rose-600 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold text-sm text-rose-800">
+                          Rekonsiliasi Kas: Selisih Kurang / Defisit (-{formatRupiah(Math.abs(selectedShiftForDetail?.cash_difference ?? 0))})
+                        </p>
+                        <p className="text-rose-700 text-[11px] mt-0.5">
+                          Uang fisik di kasir tercatat lebih sedikit daripada saldo ekspektasi sistem.
+                        </p>
+                      </div>
+                    </div>
+                  )
+                ) : (
+                  <div className="flex items-start gap-3 p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-xl text-amber-900 text-xs">
+                    <Clock className="size-5 text-amber-600 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold text-sm text-amber-800">Shift Sedang Berjalan (Belum Ditutup)</p>
+                      <p className="text-amber-700 text-[11px] mt-0.5">
+                        Kasir belum menyelesaikan shift. Rekonsiliasi kas fisik dan pencatatan selisih akan dievaluasi saat penutupan shift.
+                      </p>
+                    </div>
+                  </div>
+                )}
 
-            {selectedShiftForDetail?.notes && (
-              <div className="text-xs p-3 rounded-lg border bg-muted/10 space-y-1">
-                <span className="font-semibold text-muted-foreground block">Catatan Shift:</span>
-                <p className="text-foreground">{selectedShiftForDetail.notes}</p>
-              </div>
-            )}
-
-            {/* Tabel Mutasi */}
-            <div className="space-y-2">
-              <h4 className="text-xs font-bold">Daftar Mutasi Kas ({shiftMovements.length})</h4>
-              {isLoadingMovements ? (
-                <div className="p-8 text-center text-xs text-muted-foreground">Memuat mutasi kas...</div>
-              ) : shiftMovements.length === 0 ? (
-                <div className="p-8 text-center text-xs text-muted-foreground">Tidak ada mutasi kas selain modal awal.</div>
-              ) : (
-                <div className="rounded-xl border overflow-hidden">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="text-xs">
-                        <TableHead>Waktu</TableHead>
-                        <TableHead>Jenis</TableHead>
-                        <TableHead>Alasan / Ref</TableHead>
-                        <TableHead className="text-right">Nominal</TableHead>
-                        <TableHead className="text-right">Saldo Sesudah</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody className="text-xs font-medium">
-                      {shiftMovements.map((m) => {
-                        const isPositive =
-                          m.movement_type === "opening_cash" ||
-                          m.movement_type === "cash_sale" ||
-                          m.movement_type === "cash_in";
-                        return (
-                          <TableRow key={m.id}>
-                            <TableCell className="font-mono text-muted-foreground whitespace-nowrap">
-                              {formatDate(m.created_at)}
-                            </TableCell>
-                            <TableCell>{getMovementTypeBadge(m.movement_type)}</TableCell>
-                            <TableCell className="max-w-xs truncate" title={m.reason}>
-                              {m.reason}
-                            </TableCell>
-                            <TableCell className={`text-right font-mono font-bold whitespace-nowrap ${isPositive ? "text-emerald-700" : "text-rose-700"}`}>
-                              {isPositive ? "+" : "-"}{formatRupiah(m.amount)}
-                            </TableCell>
-                            <TableCell className="text-right font-mono font-bold whitespace-nowrap">
-                              {formatRupiah(m.balance_after)}
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
+                {/* 2. Informasi Waktu & Durasi Shift */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 rounded-xl border bg-muted/20 text-xs">
+                  <div>
+                    <span className="text-muted-foreground block text-[11px]">Waktu Buka Shift</span>
+                    <span className="font-mono font-bold text-foreground">
+                      {selectedShiftForDetail && formatDate(selectedShiftForDetail.opened_at)}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground block text-[11px]">Waktu Tutup Shift</span>
+                    <span className="font-mono font-bold text-foreground">
+                      {selectedShiftForDetail?.closed_at ? formatDate(selectedShiftForDetail.closed_at) : "Masih Buka (Aktif)"}
+                    </span>
+                  </div>
                 </div>
-              )}
-            </div>
+
+                {/* 3. Grid Rincian Finansial Shift (Sesuai Persyaratan F5.4) */}
+                <div className="space-y-1.5">
+                  <h4 className="text-xs font-bold text-foreground">Rincian Finansial Kas Drawer</h4>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+                    <Card className="rounded-xl shadow-2xs">
+                      <CardHeader className="p-3 pb-1">
+                        <CardDescription className="text-[10px] font-semibold text-muted-foreground">Modal Awal</CardDescription>
+                        <CardTitle className="text-sm font-bold font-mono">
+                          {formatRupiah(selectedShiftSummary?.openingCash ?? selectedShiftForDetail?.opening_cash ?? 0)}
+                        </CardTitle>
+                      </CardHeader>
+                    </Card>
+
+                    <Card className="rounded-xl shadow-2xs">
+                      <CardHeader className="p-3 pb-1">
+                        <CardDescription className="text-[10px] font-semibold text-emerald-700">Penjualan Tunai (+)</CardDescription>
+                        <CardTitle className="text-sm font-bold font-mono text-emerald-700">
+                          +{formatRupiah(selectedShiftSummary?.totalCashSales ?? 0)}
+                        </CardTitle>
+                      </CardHeader>
+                    </Card>
+
+                    <Card className="rounded-xl shadow-2xs">
+                      <CardHeader className="p-3 pb-1">
+                        <CardDescription className="text-[10px] font-semibold text-rose-700">Refund Tunai (-)</CardDescription>
+                        <CardTitle className="text-sm font-bold font-mono text-rose-700">
+                          -{formatRupiah(selectedShiftSummary?.totalCashRefunds ?? 0)}
+                        </CardTitle>
+                      </CardHeader>
+                    </Card>
+
+                    <Card className="rounded-xl shadow-2xs">
+                      <CardHeader className="p-3 pb-1">
+                        <CardDescription className="text-[10px] font-semibold text-blue-700">Kas Masuk (+)</CardDescription>
+                        <CardTitle className="text-sm font-bold font-mono text-blue-700">
+                          +{formatRupiah(selectedShiftSummary?.totalCashIn ?? 0)}
+                        </CardTitle>
+                      </CardHeader>
+                    </Card>
+
+                    <Card className="rounded-xl shadow-2xs">
+                      <CardHeader className="p-3 pb-1">
+                        <CardDescription className="text-[10px] font-semibold text-amber-700">Kas Keluar (-)</CardDescription>
+                        <CardTitle className="text-sm font-bold font-mono text-amber-700">
+                          -{formatRupiah(selectedShiftSummary?.totalCashOut ?? 0)}
+                        </CardTitle>
+                      </CardHeader>
+                    </Card>
+
+                    <Card className="rounded-xl border-primary/30 bg-primary/5 shadow-2xs">
+                      <CardHeader className="p-3 pb-1">
+                        <CardDescription className="text-[10px] font-bold text-primary">Expected Cash</CardDescription>
+                        <CardTitle className="text-sm font-extrabold font-mono text-primary">
+                          {formatRupiah(selectedShiftSummary?.expectedCash ?? selectedShiftForDetail?.expected_cash ?? 0)}
+                        </CardTitle>
+                      </CardHeader>
+                    </Card>
+                  </div>
+                </div>
+
+                {/* 4. Perbandingan Rekonsiliasi Fisik */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 rounded-xl border bg-muted/20 text-xs">
+                  <div>
+                    <span className="text-muted-foreground block text-[11px]">Uang Fisik Aktual (Dihitung Kasir)</span>
+                    <span className="font-mono font-extrabold text-base text-foreground">
+                      {selectedShiftForDetail?.actual_cash !== null
+                        ? formatRupiah(selectedShiftForDetail?.actual_cash ?? 0)
+                        : "- (Shift Belum Ditutup)"}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground block text-[11px]">Selisih Kas Rekonsiliasi</span>
+                    <span className="font-mono font-extrabold text-base">
+                      {selectedShiftForDetail?.status === "closed" ? (
+                        (selectedShiftForDetail?.cash_difference ?? 0) === 0 ? (
+                          <span className="text-emerald-700">Pas (Rp 0)</span>
+                        ) : (selectedShiftForDetail?.cash_difference ?? 0) > 0 ? (
+                          <span className="text-blue-700">+{formatRupiah(selectedShiftForDetail?.cash_difference ?? 0)}</span>
+                        ) : (
+                          <span className="text-rose-700">-{formatRupiah(Math.abs(selectedShiftForDetail?.cash_difference ?? 0))}</span>
+                        )
+                      ) : (
+                        <span className="text-muted-foreground">-</span>
+                      )}
+                    </span>
+                  </div>
+                </div>
+
+                {/* 5. Catatan Shift / Rekonsiliasi */}
+                {selectedShiftForDetail?.notes && (
+                  <div className="text-xs p-3.5 rounded-xl border bg-muted/10 space-y-1">
+                    <span className="font-semibold text-muted-foreground block text-[11px]">Catatan Pembukaan / Penutupan Shift:</span>
+                    <p className="text-foreground leading-relaxed">{selectedShiftForDetail.notes}</p>
+                  </div>
+                )}
+
+                {/* 6. Tabel Buku Besar Mutasi Kas Shift */}
+                <div className="space-y-2 pt-1">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold text-foreground">
+                      Buku Besar Pergerakan Kas Drawer ({shiftMovements.length} Mutasi)
+                    </h4>
+                    <span className="text-[11px] text-muted-foreground">Urutan Kronologis</span>
+                  </div>
+
+                  {shiftMovements.length === 0 ? (
+                    <div className="p-8 text-center text-xs text-muted-foreground border rounded-xl">
+                      Tidak ada pergerakan kas selain modal awal.
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border overflow-hidden">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="text-xs">
+                            <TableHead>Waktu</TableHead>
+                            <TableHead>Jenis</TableHead>
+                            <TableHead>Keterangan / Alasan</TableHead>
+                            <TableHead className="text-right">Nominal</TableHead>
+                            <TableHead className="text-right">Saldo Sesudah</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody className="text-xs font-medium">
+                          {shiftMovements.map((m) => {
+                            const isPositive =
+                              m.movement_type === "opening_cash" ||
+                              m.movement_type === "cash_sale" ||
+                              m.movement_type === "cash_in";
+                            return (
+                              <TableRow key={m.id}>
+                                <TableCell className="font-mono text-muted-foreground whitespace-nowrap">
+                                  {formatDate(m.created_at)}
+                                </TableCell>
+                                <TableCell>{getMovementTypeBadge(m.movement_type)}</TableCell>
+                                <TableCell className="max-w-xs truncate" title={m.reason}>
+                                  {m.reason}
+                                </TableCell>
+                                <TableCell
+                                  className={`text-right font-mono font-bold whitespace-nowrap ${
+                                    isPositive ? "text-emerald-700" : "text-rose-700"
+                                  }`}
+                                >
+                                  {isPositive ? "+" : "-"}
+                                  {formatRupiah(m.amount)}
+                                </TableCell>
+                                <TableCell className="text-right font-mono font-bold whitespace-nowrap">
+                                  {formatRupiah(m.balance_after)}
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
           </div>
 
           <DialogFooter className="p-4 border-t bg-muted/20">
@@ -687,7 +1015,7 @@ export function AdminShiftManager({
               variant="outline"
               size="sm"
               onClick={() => setIsDetailModalOpen(false)}
-              className="rounded-xl text-xs"
+              className="rounded-xl text-xs font-semibold"
             >
               Tutup
             </Button>

@@ -11,6 +11,7 @@ import {
   type CashMovement,
   type Shift,
   type ShiftActionResult,
+  type ShiftStatus,
   type ShiftSummary,
   type ShiftWithCashier,
 } from "./types";
@@ -479,6 +480,9 @@ export async function getCashMovementsAction(
  */
 export async function getShiftHistoryAction(options?: {
   cashierId?: string;
+  status?: ShiftStatus;
+  startDate?: string;
+  endDate?: string;
   limit?: number;
   offset?: number;
 }): Promise<ShiftActionResult<ShiftWithCashier[]>> {
@@ -508,6 +512,18 @@ export async function getShiftHistoryAction(options?: {
   } else if (options?.cashierId) {
     // Admin filter spesifik kasir
     query = query.eq("cashier_id", options.cashierId);
+  }
+
+  if (options?.status) {
+    query = query.eq("status", options.status);
+  }
+
+  if (options?.startDate) {
+    query = query.gte("opened_at", options.startDate);
+  }
+
+  if (options?.endDate) {
+    query = query.lte("opened_at", options.endDate);
   }
 
   const { data, error } = await query;
