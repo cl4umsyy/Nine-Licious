@@ -5,6 +5,7 @@ import {
   ClipboardList,
   Database,
   MapPin,
+  Wallet,
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { PendingServingPanel } from "@/components/pos/pending-serving-panel";
@@ -30,6 +31,7 @@ import type {
   ModifierOption,
   Product,
   ProductModifierGroup,
+  Shift,
   TableZone,
 } from "@/types/database";
 
@@ -42,6 +44,7 @@ export default async function PosPage() {
   let tables: DiningTable[] = [];
   let zones: TableZone[] = [];
   let discounts: Discount[] = [];
+  let activeShift: Shift | null = null;
   let taxPercent = 10;
   let serviceChargePercent = 5;
   let loadError: string | null = null;
@@ -67,6 +70,7 @@ export default async function PosPage() {
         settingsRes,
         discountsRes,
         pendingServingRes,
+        shiftRes,
       ] = await Promise.all([
         supabase
           .from("menu_categories")
@@ -118,7 +122,17 @@ export default async function PosPage() {
           .eq("is_active", true)
           .order("name", { ascending: true }),
         getPendingServingOrdersAction(),
+        supabase
+          .from("shifts")
+          .select("*")
+          .eq("cashier_id", session.profile.id)
+          .eq("status", "open")
+          .maybeSingle(),
       ]);
+
+      if (shiftRes?.data) {
+        activeShift = shiftRes.data as unknown as Shift;
+      }
 
       if (pendingServingRes.ok && pendingServingRes.data) {
         pendingServingData = pendingServingRes.data;
@@ -237,6 +251,19 @@ export default async function PosPage() {
                 <ArrowRight className="size-3.5 ml-1.5" />
               </Link>
             </Button>
+            <Button
+              asChild
+              variant={activeShift ? "outline" : "default"}
+              size="sm"
+              className={`h-8.5 px-3 text-xs font-semibold rounded-xl ${
+                !activeShift ? "bg-amber-600 hover:bg-amber-700 text-white font-bold" : ""
+              }`}
+            >
+              <Link href="/pos/shift">
+                <Wallet className="size-3.5 mr-1.5" />
+                {activeShift ? "Shift Aktif" : "Buka Shift"}
+              </Link>
+            </Button>
             <Badge
               variant="outline"
               className="h-8.5 px-3 text-xs font-semibold rounded-xl"
@@ -249,6 +276,23 @@ export default async function PosPage() {
 
       {!loadError ? (
         <PendingServingPanel initialData={pendingServingData} />
+      ) : null}
+
+      {!loadError && !activeShift ? (
+        <Alert className="border-amber-500/40 bg-amber-500/10 text-amber-950 dark:text-amber-100 py-2.5 px-3.5">
+          <Wallet className="size-4 text-amber-600 dark:text-amber-400 mt-0.5" />
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 w-full">
+            <div>
+              <AlertTitle className="text-xs font-bold">Shift Kasir Belum Dibuka</AlertTitle>
+              <AlertDescription className="text-[11px] text-amber-900/90 dark:text-amber-200/90">
+                Anda belum membuka shift kasir. Pembayaran tunai mewajibkan shift aktif dengan modal kas awal.
+              </AlertDescription>
+            </div>
+            <Button asChild size="sm" className="h-7.5 px-3 text-xs font-bold shrink-0 bg-amber-600 hover:bg-amber-700 text-white rounded-lg">
+              <Link href="/pos/shift">Buka Shift Sekarang</Link>
+            </Button>
+          </div>
+        </Alert>
       ) : null}
 
       {loadError ? (
@@ -284,6 +328,7 @@ export default async function PosPage() {
           serviceChargePercent={serviceChargePercent}
           discounts={discounts}
           userRole={session.profile.role}
+          activeShift={activeShift}
         />
       )}
     </div>

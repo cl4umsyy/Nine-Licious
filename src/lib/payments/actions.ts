@@ -316,6 +316,8 @@ export async function processOrderRefundAction(
   revalidatePath("/pos/floor");
   revalidatePath("/admin/tables");
   revalidatePath("/admin");
+  revalidatePath("/pos/shift");
+  revalidatePath("/admin/shifts");
 
   const successMsg =
     result.status === "pending"

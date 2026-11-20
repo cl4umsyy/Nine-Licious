@@ -9,6 +9,7 @@ import {
   ShoppingCart,
   Users,
   UtensilsCrossed,
+  Wallet,
   type LucideIcon,
 } from "lucide-react";
 import type { UserRole } from "@/lib/auth/roles";
@@ -59,6 +60,13 @@ export const NAV_ITEMS: NavItem[] = [
     roles: ["admin"],
   },
   {
+    href: "/admin/shifts",
+    label: "Shift & Kas",
+    description: "Monitoring shift kasir aktif, mutasi laci, dan riwayat rekonsiliasi.",
+    icon: Wallet,
+    roles: ["admin"],
+  },
+  {
     href: "/admin/users",
     label: "Pengguna",
     description: "Kelola akun dan hak akses staf.",
@@ -77,6 +85,13 @@ export const NAV_ITEMS: NavItem[] = [
     label: "Daftar Pesanan",
     description: "Pantau pesanan aktif, pembayaran, dapur, dan penyajian.",
     icon: ClipboardList,
+    roles: ["admin", "kasir"],
+  },
+  {
+    href: "/pos/shift",
+    label: "Kelola Shift",
+    description: "Buka/tutup shift kasir, saldo kas laci, dan mutasi kas.",
+    icon: Wallet,
     roles: ["admin", "kasir"],
   },
   {

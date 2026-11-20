@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import Link from "next/link";
 import {
   AlertCircle,
   Banknote,
@@ -13,6 +14,7 @@ import {
   Receipt,
   RefreshCw,
   Split,
+  Wallet,
   XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -42,6 +44,8 @@ import {
   processPosManualPaymentAction,
   type OrderPaymentSummaryData,
 } from "@/lib/payments/actions";
+import { getActiveShiftAction } from "@/lib/shifts/actions";
+import type { Shift } from "@/types/database";
 
 declare global {
   interface Window {
@@ -67,6 +71,7 @@ export type PaymentModalProps = {
   isOpen: boolean;
   onClose: () => void;
   onPaymentSuccess: (orderId: string, isSettled: boolean) => void;
+  activeShift?: Shift | null;
 };
 
 export function PaymentModal({
@@ -74,10 +79,31 @@ export function PaymentModal({
   isOpen,
   onClose,
   onPaymentSuccess,
+  activeShift: propActiveShift,
 }: PaymentModalProps) {
   const [midtransWaiting, setMidtransWaiting] = useState(false);
   const [method, setMethod] = useState<PaymentMethodTab>("cash");
   const [splitMode, setSplitMode] = useState<SplitMode>("full");
+  const [fetchedActiveShift, setFetchedActiveShift] = useState<Shift | null>(null);
+  const activeShift = propActiveShift !== undefined ? propActiveShift : fetchedActiveShift;
+  const [isLoadingShift, setIsLoadingShift] = useState(false);
+
+  useEffect(() => {
+    if (propActiveShift !== undefined || !isOpen) return;
+    let isMounted = true;
+    async function fetchShift() {
+      setIsLoadingShift(true);
+      const res = await getActiveShiftAction();
+      if (isMounted && res.ok) {
+        setFetchedActiveShift((res.data as unknown as Shift) || null);
+      }
+      if (isMounted) setIsLoadingShift(false);
+    }
+    void fetchShift();
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen, propActiveShift]);
 
   const remainingBalance = useMemo(() => {
     if (!order) return 0;
@@ -159,6 +185,8 @@ export function PaymentModal({
             setMidtransWaiting={setMidtransWaiting}
             activeSnapToken={activeSnapToken}
             setActiveSnapToken={setActiveSnapToken}
+            activeShift={activeShift}
+            isLoadingShift={isLoadingShift}
           />
         ) : null}
       </DialogContent>
@@ -189,6 +217,8 @@ function PaymentModalContent({
   setMidtransWaiting,
   activeSnapToken,
   setActiveSnapToken,
+  activeShift,
+  isLoadingShift,
 }: {
   order: OrderWithDetails;
   onClose: () => void;
@@ -212,6 +242,8 @@ function PaymentModalContent({
   setMidtransWaiting: (waiting: boolean) => void;
   activeSnapToken: string | null;
   setActiveSnapToken: (token: string | null) => void;
+  activeShift: Shift | null;
+  isLoadingShift: boolean;
 }) {
   // State proses transaksi, reservasi gateway & Midtrans
   const [isSubmitting, startTransition] = useTransition();
@@ -397,6 +429,13 @@ function PaymentModalContent({
 
     if (!order.is_finalized) {
       toast.error("Pesanan belum difinalisasi. Mohon finalisasi pesanan terlebih dahulu.");
+      return;
+    }
+
+    if (method === "cash" && !activeShift) {
+      toast.error(
+        "Kasir belum membuka shift kasir. Buka shift terlebih dahulu sebelum memproses pembayaran tunai.",
+      );
       return;
     }
 
@@ -987,6 +1026,28 @@ function PaymentModalContent({
           {/* TAB 1: TUNAI (CASH) */}
           {method === "cash" && (
             <div className="rounded-2xl border border-border/80 bg-card p-4 sm:p-5 space-y-4">
+              {!isLoadingShift && !activeShift && (
+                <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3.5 text-xs text-destructive space-y-2">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="size-4 shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <p className="font-bold">Shift Kasir Belum Dibuka</p>
+                      <p className="leading-relaxed">
+                        Pembayaran tunai mewajibkan shift kasir aktif untuk pencatatan laci kas fisik. Buka shift terlebih dahulu untuk memproses transaksi tunai.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex justify-end">
+                    <Button asChild size="sm" variant="destructive" className="h-8 text-xs font-semibold rounded-lg gap-1.5">
+                      <Link href="/pos/shift" target="_blank">
+                        <Wallet className="size-3.5" />
+                        <span>Buka Shift Sekarang</span>
+                      </Link>
+                    </Button>
+                  </div>
+                </div>
+              )}
+
               {isCashBlockedByReservation && !isAlreadySettledInDb && (
                 <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3.5 text-xs text-destructive space-y-1.5">
                   <div className="flex items-start gap-2">
@@ -1347,7 +1408,8 @@ function PaymentModalContent({
               midtransWaiting ||
               payAmount <= 0 ||
               isCashDeficit ||
-              isCashBlockedByReservation
+              isCashBlockedByReservation ||
+              (method === "cash" && !activeShift)
             }
             onClick={handleProcessManualPayment}
             className="h-11 px-6 text-xs sm:text-sm font-bold bg-primary text-primary-foreground shadow-sm rounded-xl gap-2 hover:bg-primary/90 w-full sm:w-auto"
@@ -1356,6 +1418,11 @@ function PaymentModalContent({
               <>
                 <Loader2 className="size-4 animate-spin shrink-0" />
                 <span>Memproses Pembayaran...</span>
+              </>
+            ) : method === "cash" && !activeShift ? (
+              <>
+                <Wallet className="size-4 shrink-0" />
+                <span>Buka Shift Dahulu</span>
               </>
             ) : (
               <>

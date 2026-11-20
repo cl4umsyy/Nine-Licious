@@ -34,6 +34,7 @@ import type {
   DiningTable,
   Discount,
   MenuCategory,
+  Shift,
   TableStatus,
   TableZone,
 } from "@/types/database";
@@ -47,6 +48,7 @@ export type PosContainerProps = {
   serviceChargePercent: number;
   discounts?: Discount[];
   userRole?: string;
+  activeShift?: Shift | null;
 };
 
 export function PosContainer({
@@ -58,6 +60,7 @@ export function PosContainer({
   serviceChargePercent,
   discounts = [],
   userRole = "kasir",
+  activeShift = null,
 }: PosContainerProps) {
   const router = useRouter();
   const [tableStatusOverrides, setTableStatusOverrides] = useState<
@@ -539,6 +542,7 @@ export function PosContainer({
       <PaymentModal
         order={paymentOrder}
         isOpen={paymentOrder !== null}
+        activeShift={activeShift}
         onClose={() => {
           if (paymentOrder) {
             setConfirmedOrder(paymentOrder);

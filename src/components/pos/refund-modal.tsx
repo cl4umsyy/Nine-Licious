@@ -1,7 +1,7 @@
 "use client";
 
-import { useId, useState, useTransition } from "react";
-import { Clock, DollarSign, Loader2, RotateCcw, ShieldAlert } from "lucide-react";
+import { useEffect, useId, useState, useTransition } from "react";
+import { Clock, DollarSign, Loader2, RotateCcw, ShieldAlert, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,8 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { confirmMidtransRefundAction, processOrderRefundAction } from "@/lib/payments/actions";
+import { getAllActiveShiftsAction } from "@/lib/shifts/actions";
+import type { ShiftWithCashier } from "@/lib/shifts/types";
 import type { Payment, RefundMethod, RefundType } from "@/types/database";
 
 export type RefundOrderData = {
@@ -97,13 +99,39 @@ function RefundModalContent({
   );
   const [pendingRefundId, setPendingRefundId] = useState<string | null>(null);
   const [gatewayRefundId, setGatewayRefundId] = useState<string>("");
+  const [activeShifts, setActiveShifts] = useState<ShiftWithCashier[]>([]);
+  const [selectedShiftId, setSelectedShiftId] = useState<string>("none");
+  const [isLoadingShifts, setIsLoadingShifts] = useState(false);
   const [isPending, startTransition] = useTransition();
+
+  useEffect(() => {
+    let isMounted = true;
+    async function loadShifts() {
+      setIsLoadingShifts(true);
+      const res = await getAllActiveShiftsAction();
+      if (isMounted && res.ok && res.data) {
+        setActiveShifts(res.data);
+      }
+      if (isMounted) setIsLoadingShifts(false);
+    }
+    void loadShifts();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // Perhitungan sisa balance jika pembayaran spesifik dipilih
   const selectedPayment = order.payments?.find((p) => p.id === selectedPaymentId);
   const maxRefundAllowed = selectedPayment
     ? Math.min(selectedPayment.amount, refundableBalance)
     : refundableBalance;
+
+  const selectedShift = activeShifts.find((s) => s.id === selectedShiftId);
+  const isShiftDeficit =
+    refundMethod === "cash" &&
+    selectedShiftId !== "none" &&
+    selectedShift &&
+    amount > selectedShift.expected_cash;
 
   // Sesuaikan nominal saat tipe refund atau payment berubah
   const handleTypeChange = (val: RefundType) => {
@@ -146,6 +174,15 @@ function RefundModalContent({
       return;
     }
 
+    if (refundMethod === "cash" && selectedShiftId !== "none") {
+      if (selectedShift && amount > selectedShift.expected_cash) {
+        toast.error(
+          `Saldo kas laci kasir ${selectedShift.cashier.full_name} tidak mencukupi (Tersedia: Rp ${selectedShift.expected_cash.toLocaleString("id-ID")}).`,
+        );
+        return;
+      }
+    }
+
     startTransition(async () => {
       const res = await processOrderRefundAction({
         orderId: order.id,
@@ -155,6 +192,10 @@ function RefundModalContent({
         refundMethod,
         reason: reason.trim(),
         idempotencyKey,
+        shiftId:
+          refundMethod === "cash" && selectedShiftId !== "none"
+            ? selectedShiftId
+            : undefined,
       });
 
       if (!res.ok) {
@@ -328,8 +369,6 @@ function RefundModalContent({
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="cash">Tunai (Cash Drawer)</SelectItem>
-                      <SelectItem value="qris_manual">QRIS Manual</SelectItem>
-                      <SelectItem value="transfer">Transfer Bank Manual</SelectItem>
                       <SelectItem value="midtrans">Midtrans Gateway</SelectItem>
                     </SelectContent>
                   </Select>
@@ -339,6 +378,52 @@ function RefundModalContent({
                     </p>
                   )}
                 </div>
+
+                {/* Pemilihan Laci Shift Kasir untuk Refund Tunai (F5.2) */}
+                {refundMethod === "cash" && (
+                  <div className="space-y-1.5 p-3 rounded-lg border bg-muted/30">
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor={`${componentId}-shift-select`} className="text-xs font-semibold flex items-center gap-1.5">
+                        <Wallet className="size-3.5 text-primary" />
+                        Laci Kasir Pengeluar Dana
+                      </Label>
+                      {selectedShift && (
+                        <span className="text-[11px] font-medium text-muted-foreground">
+                          Saldo Laci: <strong className="text-foreground font-mono">Rp {selectedShift.expected_cash.toLocaleString("id-ID")}</strong>
+                        </span>
+                      )}
+                    </div>
+                    <Select
+                      value={selectedShiftId}
+                      onValueChange={setSelectedShiftId}
+                      disabled={isLoadingShifts}
+                    >
+                      <SelectTrigger id={`${componentId}-shift-select`} className="h-8.5 text-xs">
+                        <SelectValue placeholder="Pilih laci kasir tempat uang dikeluarkan" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">
+                          -- Di luar shift kasir (Pengeluaran langsung admin) --
+                        </SelectItem>
+                        {activeShifts.map((shift) => (
+                          <SelectItem key={shift.id} value={shift.id}>
+                            Kasir: {shift.cashier.full_name} (@{shift.cashier.username}) — Saldo: Rp {shift.expected_cash.toLocaleString("id-ID")}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {isShiftDeficit && (
+                      <p className="text-[11px] text-destructive font-medium">
+                        * Peringatan: Saldo kas pada laci ini kurang dari nominal refund (Rp {selectedShift?.expected_cash.toLocaleString("id-ID")}).
+                      </p>
+                    )}
+                    {selectedShiftId === "none" && (
+                      <p className="text-[11px] text-muted-foreground">
+                        * Refund dicatat sebagai pengeluaran kas langsung oleh admin di luar shift aktif kasir.
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {/* Nominal Refund */}
                 <div className="space-y-1.5">
