@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import {
   AlertCircle,
   ArrowUpRight,
@@ -113,6 +114,7 @@ export function CashierShiftManager({
   initialMovements: movements,
   initialHistory: history,
 }: CashierShiftManagerProps) {
+  const router = useRouter();
   // Dialog States
   const [isOpenShiftOpen, setIsOpenShiftOpen] = useState(false);
   const [openingCashInput, setOpeningCashInput] = useState<number>(200000);
@@ -149,8 +151,8 @@ export function CashierShiftManager({
       if (res.ok && res.data) {
         toast.success(res.message);
         setIsOpenShiftOpen(false);
-        // Refresh halaman penuh untuk sinkronisasi state server
-        window.location.reload();
+        // Refresh server components untuk sinkronisasi state
+        router.refresh();
       } else {
         toast.error(res.message || "Gagal membuka shift kasir.");
       }
@@ -194,7 +196,7 @@ export function CashierShiftManager({
         setIsCashMovementOpen(false);
         setMovementAmount(0);
         setMovementReason("");
-        window.location.reload();
+        router.refresh();
       } else {
         toast.error(res.message || "Gagal mencatat mutasi kas.");
       }
@@ -229,7 +231,7 @@ export function CashierShiftManager({
       if (res.ok && res.data) {
         toast.success(res.message);
         setIsCloseShiftOpen(false);
-        window.location.reload();
+        router.refresh();
       } else {
         toast.error(res.message || "Gagal menutup shift.");
       }

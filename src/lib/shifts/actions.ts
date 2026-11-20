@@ -85,6 +85,7 @@ export async function openShiftAction(
   }
 
   revalidatePath("/pos");
+  revalidatePath("/pos/orders");
   revalidatePath("/pos/shift");
   revalidatePath("/admin/shifts");
 
@@ -335,6 +336,7 @@ export async function closeShiftAction(
   }
 
   revalidatePath("/pos");
+  revalidatePath("/pos/orders");
   revalidatePath("/pos/shift");
   revalidatePath("/admin/shifts");
 
@@ -404,6 +406,7 @@ export async function recordCashMovementAction(
   }
 
   revalidatePath("/pos");
+  revalidatePath("/pos/orders");
   revalidatePath("/pos/shift");
   revalidatePath("/admin/shifts");
 

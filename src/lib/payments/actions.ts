@@ -236,7 +236,10 @@ export async function processPosManualPaymentAction(
 
   // 6. Revalidasi Halaman POS
   revalidatePath("/pos");
+  revalidatePath("/pos/orders");
+  revalidatePath("/pos/shift");
   revalidatePath("/admin");
+  revalidatePath("/admin/shifts");
 
   const successMessage = result.is_settled
     ? `Pembayaran berhasil! Pesanan ${result.order_number} LUNAS. Nomor antrean: ${result.queue_number ?? "-"}.`
@@ -313,6 +316,7 @@ export async function processOrderRefundAction(
 
   // 5. Revalidasi Jalur Tampilan Terkait
   revalidatePath("/pos");
+  revalidatePath("/pos/orders");
   revalidatePath("/pos/floor");
   revalidatePath("/admin/tables");
   revalidatePath("/admin");

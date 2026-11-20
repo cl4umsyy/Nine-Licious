@@ -59,12 +59,13 @@ import { confirmOrderServedAction } from "@/lib/orders/serving-actions";
 import type { OrderWithDetails } from "@/lib/orders/types";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
-import type { OrderType } from "@/types/database";
+import type { OrderType, Shift } from "@/types/database";
 
 type CashierOrdersBoardProps = {
   initialData: CashierOrdersBoardData;
   userRole: string;
   initialError?: string | null;
+  activeShift?: Shift | null;
 };
 
 type ConnectionState = "connecting" | "connected" | "polling";
@@ -105,6 +106,7 @@ export function CashierOrdersBoard({
   initialData,
   userRole,
   initialError = null,
+  activeShift,
 }: CashierOrdersBoardProps) {
   const [orders, setOrders] = useState<CashierOrderListItem[]>(() =>
     mergeCashierOrdersById(initialData.orders),
@@ -837,6 +839,7 @@ export function CashierOrdersBoard({
       <PaymentModal
         order={paymentOrder}
         isOpen={paymentOrder !== null}
+        activeShift={activeShift}
         onClose={() => {
           setPaymentOrder(null);
           void syncOrders({ manual: false });

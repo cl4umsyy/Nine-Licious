@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import {
   Eye,
   History,
@@ -110,6 +111,7 @@ export function AdminShiftManager({
   allShifts,
   cashiers,
 }: AdminShiftManagerProps) {
+  const router = useRouter();
   // Filter states
   const [cashierFilter, setCashierFilter] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -178,7 +180,7 @@ export function AdminShiftManager({
       if (res.ok && res.data) {
         toast.success(res.message);
         setIsOpenShiftOpen(false);
-        window.location.reload();
+        router.refresh();
       } else {
         toast.error(res.message || "Gagal membuka shift kasir.");
       }
