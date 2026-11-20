@@ -134,38 +134,62 @@ export function fieldErrorsFrom(error: z.ZodError): Record<string, string> {
   return fieldErrors;
 }
 
-export const processRefundSchema = z.object({
-  orderId: z
-    .string({ message: "ID pesanan wajib diisi." })
-    .trim()
-    .regex(uuidRegex, "ID pesanan tidak valid."),
-  amount: z.coerce
-    .number({ message: "Nominal refund harus berupa angka." })
-    .int("Nominal refund harus bilangan bulat rupiah.")
-    .positive("Nominal refund harus lebih dari Rp 0."),
-  refundType: z.enum(["full", "partial"], {
-    message: "Tipe refund harus 'full' atau 'partial'.",
+function normalizeRefundInput(input: unknown) {
+  if (typeof input !== "object" || input === null) return input;
+  const raw = input as Record<string, unknown>;
+  return {
+    orderId: raw.orderId ?? raw.order_id,
+    amount: raw.amount,
+    refundType: raw.refundType ?? raw.refund_type,
+    refundMethod: raw.refundMethod ?? raw.refund_method,
+    reason: raw.reason,
+    paymentId: raw.paymentId ?? raw.payment_id,
+    shiftId: raw.shiftId ?? raw.shift_id,
+    idempotencyKey: raw.idempotencyKey ?? raw.idempotency_key,
+  };
+}
+
+export const processRefundSchema = z.preprocess(
+  normalizeRefundInput,
+  z.object({
+    orderId: z
+      .string({ message: "ID pesanan wajib diisi." })
+      .trim()
+      .regex(uuidRegex, "ID pesanan tidak valid."),
+    amount: z.coerce
+      .number({ message: "Nominal refund harus berupa angka." })
+      .int("Nominal refund harus bilangan bulat rupiah.")
+      .positive("Nominal refund harus lebih dari Rp 0."),
+    refundType: z.enum(["full", "partial"], {
+      message: "Tipe refund harus 'full' atau 'partial'.",
+    }),
+    refundMethod: z.enum(["cash", "transfer", "midtrans", "manual"], {
+      message: "Metode refund harus 'cash', 'transfer', 'midtrans', atau 'manual'.",
+    }),
+    reason: z
+      .string({ message: "Alasan refund wajib diisi." })
+      .trim()
+      .min(3, "Alasan refund minimal 3 karakter.")
+      .max(500, "Alasan refund maksimal 500 karakter."),
+    paymentId: z
+      .string()
+      .trim()
+      .regex(uuidRegex, "ID pembayaran tidak valid.")
+      .optional()
+      .nullable(),
+    shiftId: z
+      .string()
+      .trim()
+      .regex(uuidRegex, "ID shift tidak valid.")
+      .optional()
+      .nullable(),
+    idempotencyKey: z
+      .string({ message: "Kunci idempotensi refund wajib diisi." })
+      .trim()
+      .min(8, "Kunci idempotensi refund minimal 8 karakter.")
+      .max(128, "Kunci idempotensi refund maksimal 128 karakter."),
   }),
-  refundMethod: z.enum(["cash", "transfer", "midtrans", "manual"], {
-    message: "Metode refund harus 'cash', 'transfer', 'midtrans', atau 'manual'.",
-  }),
-  reason: z
-    .string({ message: "Alasan refund wajib diisi." })
-    .trim()
-    .min(3, "Alasan refund minimal 3 karakter.")
-    .max(500, "Alasan refund maksimal 500 karakter."),
-  paymentId: z
-    .string()
-    .trim()
-    .regex(uuidRegex, "ID pembayaran tidak valid.")
-    .optional()
-    .nullable(),
-  idempotencyKey: z
-    .string({ message: "Kunci idempotensi refund wajib diisi." })
-    .trim()
-    .min(8, "Kunci idempotensi refund minimal 8 karakter.")
-    .max(128, "Kunci idempotensi refund maksimal 128 karakter."),
-});
+);
 
 export const createSnapPaymentSchema = z.object({
   orderId: z

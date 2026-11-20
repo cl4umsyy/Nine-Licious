@@ -148,13 +148,13 @@ function RefundModalContent({
 
     startTransition(async () => {
       const res = await processOrderRefundAction({
-        order_id: order.id,
-        payment_id: selectedPaymentId === "all" ? undefined : selectedPaymentId,
+        orderId: order.id,
+        paymentId: selectedPaymentId === "all" ? undefined : selectedPaymentId,
         amount,
-        refund_type: refundType,
-        refund_method: refundMethod,
+        refundType,
+        refundMethod,
         reason: reason.trim(),
-        idempotency_key: idempotencyKey,
+        idempotencyKey,
       });
 
       if (!res.ok) {

@@ -74,7 +74,9 @@ function formatSafePaymentError(rawMessage?: string): string {
     clean.includes("tidak ditemukan") ||
     clean.includes("tidak aktif") ||
     clean.includes("dinonaktifkan") ||
-    clean.includes("Hanya admin atau kasir")
+    clean.includes("Hanya admin atau kasir") ||
+    clean.includes("shift") ||
+    clean.includes("Shift")
   ) {
     return clean;
   }
@@ -296,6 +298,7 @@ export async function processOrderRefundAction(
       p_reason: input.reason,
       p_payment_id: input.paymentId ?? null,
       p_idempotency_key: input.idempotencyKey,
+      p_shift_id: input.shiftId ?? null,
     },
   );
 

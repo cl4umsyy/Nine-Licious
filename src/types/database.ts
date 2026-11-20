@@ -323,6 +323,7 @@ export type Payment = {
   idempotency_key: string | null;
   notes: string | null;
   paid_total_after?: number | null;
+  shift_id?: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -456,6 +457,47 @@ export type Refund = {
   created_at: string;
   updated_at: string;
 };
+
+export type ShiftStatus = "open" | "closed";
+
+export type Shift = {
+  id: string;
+  cashier_id: string;
+  opened_at: string;
+  closed_at: string | null;
+  opening_cash: number;
+  expected_cash: number;
+  actual_cash: number | null;
+  cash_difference: number | null;
+  status: ShiftStatus;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CashMovementType =
+  | "opening_cash"
+  | "cash_sale"
+  | "cash_refund"
+  | "cash_in"
+  | "cash_out"
+  | "closing_reconciliation";
+
+export type CashMovement = {
+  id: string;
+  shift_id: string | null;
+  movement_type: CashMovementType;
+  amount: number;
+  balance_before: number;
+  balance_after: number;
+  reason: string;
+  order_id: string | null;
+  payment_id: string | null;
+  refund_id: string | null;
+  created_by: string;
+  created_at: string;
+};
+
 
 
 
