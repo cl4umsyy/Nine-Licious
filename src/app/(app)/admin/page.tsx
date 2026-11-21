@@ -8,6 +8,7 @@ import {
   CircleCheck,
   Clock3,
   Database,
+  History,
   MapPin,
   MonitorPlay,
   Percent,
@@ -272,6 +273,12 @@ export default async function AdminDashboardPage() {
               <Link href="/admin/reports">
                 <BarChart3 />
                 Laporan
+              </Link>
+            </Button>
+            <Button asChild variant="secondary" size="sm">
+              <Link href="/admin/transactions">
+                <History />
+                Riwayat Transaksi
               </Link>
             </Button>
             <Button asChild variant="secondary" size="sm">

@@ -3,6 +3,7 @@ import {
   Boxes,
   ChefHat,
   ClipboardList,
+  History,
   LayoutDashboard,
   MapPin,
   MonitorPlay,
@@ -72,6 +73,13 @@ export const NAV_ITEMS: NavItem[] = [
     label: "Laporan",
     description: "Analisis performa penjualan, metode pembayaran, dan produk terlaris.",
     icon: BarChart3,
+    roles: ["admin"],
+  },
+  {
+    href: "/admin/transactions",
+    label: "Riwayat Transaksi",
+    description: "Audit seluruh riwayat pesanan, pembayaran, refund, dan rekonsiliasi shift.",
+    icon: History,
     roles: ["admin"],
   },
   {
