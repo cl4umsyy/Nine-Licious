@@ -182,7 +182,7 @@ export async function processPosManualPaymentAction(
         "@/lib/orders/inventory-validation"
       );
       const stockCheck = await validateOrderInventoryAvailability(
-        supabase,
+        createSupabaseAdminClient() ?? supabase,
         orderItems.map((item) => ({
           productId: item.product_id,
           quantity: item.quantity,
@@ -812,7 +812,7 @@ export async function createPosMidtransSnapAction(
         "@/lib/orders/inventory-validation"
       );
       const stockCheck = await validateOrderInventoryAvailability(
-        supabase,
+        createSupabaseAdminClient() ?? supabase,
         orderItems.map((item) => ({
           productId: item.product_id,
           quantity: item.quantity,

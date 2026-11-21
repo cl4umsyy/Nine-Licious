@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { formatStockQuantity } from "@/lib/inventory/calculations";
 import type { IngredientUnit } from "@/lib/inventory/constants";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export type OrderItemInput = {
   productId: string;
@@ -55,10 +56,30 @@ export async function validateOrderInventoryAvailability(
   const productIds = Array.from(new Set(validItems.map((i) => i.productId)));
 
   // 1. Ambil seluruh baris resep produk yang dipesan
-  const { data: recipesData, error: recipesError } = await supabase
+  const { data: initialRecipes, error: recipesError } = await supabase
     .from("recipes")
     .select("product_id, ingredient_id, quantity_required")
     .in("product_id", productIds);
+  let recipesData = initialRecipes;
+
+  // Jika tidak ada data resep (misal: RLS recipes_select_admin membatasi sesi kasir),
+  // gunakan adminClient (service_role) untuk membaca master resep produk secara aman di server
+  if (!recipesError && (!recipesData || recipesData.length === 0)) {
+    try {
+      const adminClient = createSupabaseAdminClient();
+      if (adminClient) {
+        const { data: adminRecipes } = await adminClient
+          .from("recipes")
+          .select("product_id, ingredient_id, quantity_required")
+          .in("product_id", productIds);
+        if (adminRecipes && adminRecipes.length > 0) {
+          recipesData = adminRecipes;
+        }
+      }
+    } catch {
+      // Abaikan jika di lingkungan non-server / test mock
+    }
+  }
 
   if (recipesError) {
     // Jika tabel recipes belum ada di DB remote, lewati agar non-invasif
@@ -109,10 +130,30 @@ export async function validateOrderInventoryAvailability(
   const ingredientIds = Array.from(requiredByIngredientId.keys());
 
   // 3. Ambil data stok fisik dan reservasi terkini untuk bahan-bahan tersebut
-  const { data: ingredientsData, error: ingredientsError } = await supabase
+  const { data: initialIngredients, error: ingredientsError } = await supabase
     .from("ingredients")
     .select("id, name, unit, current_stock, reserved_stock, is_active")
     .in("id", ingredientIds);
+  let ingredientsData = initialIngredients;
+
+  // Jika ingredients kosong akibat RLS ingredients_select_admin pada kasir,
+  // gunakan adminClient untuk memeriksa saldo stok bahan baku secara akurat
+  if (!ingredientsError && (!ingredientsData || ingredientsData.length === 0)) {
+    try {
+      const adminClient = createSupabaseAdminClient();
+      if (adminClient) {
+        const { data: adminIngredients } = await adminClient
+          .from("ingredients")
+          .select("id, name, unit, current_stock, reserved_stock, is_active")
+          .in("id", ingredientIds);
+        if (adminIngredients && adminIngredients.length > 0) {
+          ingredientsData = adminIngredients;
+        }
+      }
+    } catch {
+      // Abaikan jika di lingkungan non-server / test mock
+    }
+  }
 
   if (ingredientsError) {
     return {
@@ -193,10 +234,27 @@ export async function checkAllProductsStockAvailability(
     return result;
   }
 
-  const { data: recipesData } = await supabase
+  let { data: recipesData } = await supabase
     .from("recipes")
     .select("product_id, ingredient_id, quantity_required")
     .in("product_id", productIds as string[]);
+
+  if (!recipesData || recipesData.length === 0) {
+    try {
+      const adminClient = createSupabaseAdminClient();
+      if (adminClient) {
+        const { data: adminRecipes } = await adminClient
+          .from("recipes")
+          .select("product_id, ingredient_id, quantity_required")
+          .in("product_id", productIds as string[]);
+        if (adminRecipes && adminRecipes.length > 0) {
+          recipesData = adminRecipes;
+        }
+      }
+    } catch {
+      // Lingkungan non-server / test mock
+    }
+  }
 
   const recipes = recipesData ?? [];
   if (recipes.length === 0) {
@@ -208,10 +266,27 @@ export async function checkAllProductsStockAvailability(
 
   const ingredientIds = Array.from(new Set(recipes.map((r) => r.ingredient_id)));
 
-  const { data: ingredientsData } = await supabase
+  let { data: ingredientsData } = await supabase
     .from("ingredients")
     .select("id, name, unit, current_stock, reserved_stock, is_active")
     .in("id", ingredientIds);
+
+  if (!ingredientsData || ingredientsData.length === 0) {
+    try {
+      const adminClient = createSupabaseAdminClient();
+      if (adminClient) {
+        const { data: adminIngredients } = await adminClient
+          .from("ingredients")
+          .select("id, name, unit, current_stock, reserved_stock, is_active")
+          .in("id", ingredientIds);
+        if (adminIngredients && adminIngredients.length > 0) {
+          ingredientsData = adminIngredients;
+        }
+      }
+    } catch {
+      // Lingkungan non-server / test mock
+    }
+  }
 
   const ingMap = new Map((ingredientsData ?? []).map((i) => [i.id, i]));
 

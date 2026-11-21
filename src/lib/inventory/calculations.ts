@@ -17,7 +17,11 @@ const MILLI_SCALE = 1000;
  * tanpa galat presisi IEEE-754 floating point.
  * Konsisten dengan tipe PostgreSQL `numeric(12, 3)`.
  */
-export function toMilliUnits(value: number | string): number {
+export function toMilliUnits(value: number | string | null | undefined): number {
+  if (value === null || value === undefined) {
+    throw new Error("Nilai kuantitas tidak boleh kosong (null atau undefined).");
+  }
+
   if (typeof value === "number") {
     if (!Number.isFinite(value)) {
       throw new Error("Nilai kuantitas tidak valid (harus angka terhingga).");
@@ -26,7 +30,14 @@ export function toMilliUnits(value: number | string): number {
     return parseFixedDecimalToMilli(fixed);
   }
 
+  if (typeof value !== "string") {
+    throw new Error(`Format angka desimal tidak valid: "${String(value)}".`);
+  }
+
   const trimmed = value.trim();
+  if (trimmed === "") {
+    throw new Error("Nilai kuantitas tidak boleh berupa string kosong.");
+  }
   if (!/^[+-]?\d+(?:\.\d+)?$/.test(trimmed)) {
     throw new Error(`Format angka desimal tidak valid: "${value}".`);
   }
@@ -73,7 +84,9 @@ export function fromMilliUnits(milli: number): number {
 /**
  * Membulatkan nilai ke 3 angka di belakang koma (selaras numeric(12,3)).
  */
-export function roundQuantity3(value: number | string): number {
+export function roundQuantity3(
+  value: number | string | null | undefined,
+): number {
   return fromMilliUnits(toMilliUnits(value));
 }
 

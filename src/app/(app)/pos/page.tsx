@@ -22,6 +22,7 @@ import type {
   ProductModifierGroupWithDetails,
   ProductWithModifiers,
 } from "@/lib/orders/types";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import type {
   DiningTable,
@@ -183,7 +184,7 @@ export default async function PosPage() {
         }
 
         const stockAvailabilityMap = await checkAllProductsStockAvailability(
-          supabase,
+          createSupabaseAdminClient() ?? supabase,
           rawProducts.map((p) => p.id),
         );
 
@@ -222,7 +223,7 @@ export default async function PosPage() {
   }
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 space-y-2.5">
+    <div className="flex flex-col space-y-3.5 pb-8">
       <PageHeader
         title="POS Utama"
         className="shrink-0 py-0"

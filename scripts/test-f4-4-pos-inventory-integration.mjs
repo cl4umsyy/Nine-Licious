@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-/* eslint-disable @typescript-eslint/no-require-imports */
 /**
  * NINE LICIOUS POS — F4.4: INVENTORY & POS INTEGRATION TESTING SUITE
  *
@@ -14,7 +13,10 @@
 
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname, relative } from "node:path";
+import { createRequire } from "node:module";
 import ts from "typescript";
+
+const require = createRequire(import.meta.url);
 
 let passedCount = 0;
 let failedCount = 0;

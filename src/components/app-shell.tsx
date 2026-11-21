@@ -140,22 +140,12 @@ export function AppShell({ profile, environment, children }: AppShellProps) {
   const isKitchenPage = pathname === "/kitchen";
 
   return (
-    <div
-      className={cn(
-        "min-h-dvh bg-background lg:grid lg:grid-cols-[16rem_1fr]",
-        isPosPage && "lg:h-dvh lg:overflow-hidden",
-      )}
-    >
+    <div className="min-h-dvh bg-background lg:grid lg:grid-cols-[16rem_1fr]">
       <aside className="sticky top-0 hidden h-dvh border-r border-border bg-sidebar lg:block">
         <SidebarContent profile={profile} />
       </aside>
 
-      <div
-        className={cn(
-          "flex min-w-0 flex-col",
-          isPosPage && "lg:h-dvh lg:overflow-hidden",
-        )}
-      >
+      <div className="flex min-w-0 flex-col">
         <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b border-border bg-background px-3 sm:px-5">
           <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
             <SheetTrigger asChild>
@@ -260,17 +250,11 @@ export function AppShell({ profile, environment, children }: AppShellProps) {
           </div>
         </header>
 
-        <main
-          className={cn(
-            "flex-1",
-            isPosPage && "flex flex-col min-h-0 lg:overflow-hidden",
-          )}
-        >
+        <main className="flex-1">
           <div
             className={cn(
               "mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8 lg:py-8",
-              isPosPage &&
-                "flex flex-col flex-1 min-h-0 py-2.5 px-3 sm:px-4 lg:px-6 lg:py-3 max-w-[1920px]",
+              isPosPage && "py-2.5 px-3 sm:px-4 lg:px-6 lg:py-3 max-w-[1920px]",
               isKitchenPage &&
                 "max-w-[1920px] px-4 py-4 sm:px-6 lg:px-6 lg:py-5",
             )}

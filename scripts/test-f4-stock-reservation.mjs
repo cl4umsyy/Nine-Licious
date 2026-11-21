@@ -48,6 +48,7 @@ function loadTsModule(relPath) {
   moduleCache.set(absPath, mod);
 
   const localRequire = (specifier) => {
+    if (specifier === "server-only") return {};
     if (specifier.startsWith("@/")) {
       const aliasRel = specifier.replace("@/", "src/");
       const aliasAbs = resolve(process.cwd(), aliasRel);

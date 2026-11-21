@@ -333,8 +333,9 @@ export async function createPosOrderAction(
   }
 
   // 5b. Validasi Ketersediaan Bahan Baku & Stok Tersedia Server-Side (F4.4)
+  const validationClient = createSupabaseAdminClient() ?? context.supabase;
   const inventoryCheck = await validateOrderInventoryAvailability(
-    context.supabase,
+    validationClient,
     input.items.map((i) => ({ productId: i.productId, quantity: i.quantity })),
   );
 
@@ -868,8 +869,9 @@ export async function appendOrderItemsAction(
   }
 
   // 3b. Validasi Ketersediaan Bahan Baku Tambahan Server-Side (F4.4)
+  const validationClient = createSupabaseAdminClient() ?? context.supabase;
   const inventoryCheck = await validateOrderInventoryAvailability(
-    context.supabase,
+    validationClient,
     input.items.map((i) => ({ productId: i.productId, quantity: i.quantity })),
   );
 

@@ -414,11 +414,11 @@ export function PosContainer({
         </button>
       </div>
 
-      <div className="flex-1 min-h-0 flex flex-col lg:grid lg:grid-cols-[minmax(0,1fr)_390px] xl:grid-cols-[minmax(0,1fr)_420px] gap-5 xl:gap-6">
+      <div className="flex flex-col lg:grid lg:grid-cols-[minmax(0,1fr)_390px] xl:grid-cols-[minmax(0,1fr)_420px] gap-5 xl:gap-6 items-start">
         {/* Left: Product Catalog */}
         <div
           className={cn(
-            "h-full min-h-0 min-w-0 overflow-hidden flex flex-col",
+            "w-full min-w-0 flex flex-col",
             mobileTab !== "catalog" && "hidden lg:flex",
           )}
         >
@@ -432,7 +432,7 @@ export function PosContainer({
         {/* Right: Cart Panel */}
         <div
           className={cn(
-            "h-full min-h-0 min-w-0 overflow-hidden flex flex-col",
+            "w-full min-w-0 flex flex-col",
             mobileTab !== "cart" && "hidden lg:flex",
           )}
         >

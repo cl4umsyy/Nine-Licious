@@ -73,7 +73,7 @@ export function CartPanel({
     cart.length > 0 && (!isDineIn || selectedTable !== null) && !isSubmitting;
 
   return (
-    <Card className="flex flex-col h-full min-h-0 border-border/80 shadow-sm overflow-hidden bg-card rounded-2xl py-0 gap-0">
+    <Card className="flex flex-col w-full border-border/80 shadow-sm overflow-hidden bg-card rounded-2xl py-0 gap-0">
       {/* Header: Order Type Switcher & Table Indicator */}
       <CardHeader className="px-3.5 py-3 border-b bg-muted/15 space-y-2.5 shrink-0 [.border-b]:pb-3">
         <div className="flex items-center justify-between gap-2">
@@ -195,9 +195,9 @@ export function CartPanel({
       </CardHeader>
 
       {/* Cart Items List */}
-      <CardContent className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3.5 py-3 space-y-2.5">
+      <CardContent className="px-3.5 py-3 space-y-2.5">
         {cart.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-center p-6 text-muted-foreground space-y-2.5">
+          <div className="flex flex-col items-center justify-center text-center p-6 text-muted-foreground space-y-2.5 min-h-[200px]">
             <div className="flex size-12 items-center justify-center rounded-2xl bg-muted/60 text-muted-foreground/60">
               <ShoppingBag className="size-5" />
             </div>
@@ -324,8 +324,8 @@ export function CartPanel({
         )}
       </CardContent>
 
-      {/* Sticky Footer: Order Calculation & Primary Submit Action */}
-      <CardFooter className="sticky bottom-0 z-10 flex-col px-3.5 py-3 border-t bg-card space-y-2.5 shrink-0">
+      {/* Footer: Order Calculation & Primary Submit Action */}
+      <CardFooter className="flex-col px-3.5 py-3 border-t bg-card space-y-2.5">
         {/* Diskon & Promo Quick Button */}
         <Button
           type="button"

@@ -52,7 +52,7 @@ export function ProductCatalog({
   }, [products, selectedCategoryId, searchQuery]);
 
   return (
-    <div className="flex flex-col h-full min-h-0 space-y-4">
+    <div className="flex flex-col space-y-4 w-full">
       {/* Search Bar & Category Filter Bar */}
       <div className="space-y-3 shrink-0">
         <div className="relative">
@@ -119,7 +119,7 @@ export function ProductCatalog({
       </div>
 
       {/* Product Grid */}
-      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1.5 pb-2">
+      <div className="w-full">
         {filteredProducts.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-12 text-center rounded-2xl border border-dashed bg-card/40 text-muted-foreground space-y-2 mt-4">
             <Utensils className="size-8 text-muted-foreground/60" />
@@ -143,7 +143,7 @@ export function ProductCatalog({
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {filteredProducts.map((product) => {
+            {filteredProducts.map((product, idx) => {
               const isStockDepleted = product.isStockAvailable === false;
               const isAvailable = product.is_available && !isStockDepleted;
               const hasModifiers = product.modifierGroups.length > 0;
@@ -163,7 +163,7 @@ export function ProductCatalog({
                   className={`group relative flex flex-col overflow-hidden rounded-2xl border border-border/75 text-left bg-card shadow-2xs transition-all ${
                     isAvailable
                       ? "hover:border-primary/50 hover:shadow-md cursor-pointer active:scale-[0.985]"
-                      : "opacity-60 cursor-not-allowed bg-muted/40"
+                      : "cursor-not-allowed"
                   }`}
                 >
                   {/* Photo Container */}
@@ -173,31 +173,27 @@ export function ProductCatalog({
                         src={product.photo_url}
                         alt={product.name}
                         fill
+                        priority={idx === 0}
                         sizes="(max-width: 640px) 50vw, (max-width: 1280px) 33vw, 25vw"
-                        className="object-cover transition-transform duration-300 group-hover:scale-105"
+                        className={`object-cover transition-all duration-300 ${
+                          isAvailable
+                            ? "group-hover:scale-105"
+                            : "grayscale contrast-[0.95]"
+                        }`}
                       />
                     ) : (
-                      <div className="flex size-full items-center justify-center bg-brand-soft/50 text-primary/70">
+                      <div
+                        className={`flex size-full items-center justify-center ${
+                          isAvailable
+                            ? "bg-brand-soft/50 text-primary/70"
+                            : "bg-muted text-muted-foreground/60 grayscale"
+                        }`}
+                      >
                         <Utensils className="size-8" />
                       </div>
                     )}
 
-                    {/* Availability Overlay */}
-                    {!isAvailable && (
-                      <div className="absolute inset-0 bg-background/85 backdrop-blur-[2px] flex flex-col items-center justify-center p-2 text-center gap-1">
-                        <Badge
-                          variant="destructive"
-                          className="text-[10px] uppercase font-bold"
-                        >
-                          Habis
-                        </Badge>
-                        {isStockDepleted && product.missingIngredientName ? (
-                          <span className="text-[10px] font-medium text-destructive leading-tight line-clamp-2 px-1">
-                            Bahan {product.missingIngredientName} habis
-                          </span>
-                        ) : null}
-                      </div>
-                    )}
+                    {/* UX Kasir: Produk stok habis (isStockDepleted / missingIngredientName) tidak menampilkan badge "Habis" atau teks label apapun, melainkan foto produk grayscale 100%. */}
 
                     {/* Modifier Indicator Badge */}
                     {hasModifiers && isAvailable && (

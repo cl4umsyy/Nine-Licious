@@ -1024,42 +1024,90 @@ export async function adjustIngredientStockAction(
     };
   }
 
-  const normalized: StockAdjustmentResultData = {
-    movement_id: String(rpcResult.movement_id),
-    ingredient_id: String(rpcResult.ingredient_id),
-    ingredient_name: String(rpcResult.ingredient_name ?? ""),
-    unit: rpcResult.unit as IngredientUnit,
-    movement_type: rpcResult.movement_type as ManualStockMovementType,
-    quantity_delta: roundQuantity3(rpcResult.quantity_delta as number | string),
-    stock_before: roundQuantity3(rpcResult.stock_before as number | string),
-    stock_after: roundQuantity3(rpcResult.stock_after as number | string),
-    reserved_stock: roundQuantity3(
-      (rpcResult.reserved_stock as number | string) ?? 0,
-    ),
-    available_stock: roundQuantity3(
-      (rpcResult.available_stock as number | string) ??
-        Math.max(
-          0,
-          roundQuantity3(rpcResult.stock_after as number | string) -
-            roundQuantity3((rpcResult.reserved_stock as number | string) ?? 0),
-        ),
-    ),
-    min_stock: roundQuantity3(rpcResult.min_stock as number | string),
-    is_low_stock: Boolean(rpcResult.is_low_stock),
-    reason: String(rpcResult.reason ?? reason),
-    idempotent_replay: Boolean(rpcResult.idempotent_replay),
-    created_at: String(rpcResult.created_at ?? new Date().toISOString()),
-  };
+  // Ambil min_stock aktual dari master data ingredient
+  // (karena RPC adjust_ingredient_stock_atomic mengembalikan data buku besar mutasi dan boolean is_low_stock tanpa menyertakan kolom min_stock)
+  const { data: masterIngredient, error: masterErr } = await supabase
+    .from("ingredients")
+    .select("min_stock")
+    .eq("id", ingredientId)
+    .maybeSingle<{ min_stock: number | string }>();
 
-  revalidateInventoryPaths();
+  if (
+    masterErr ||
+    !masterIngredient ||
+    masterIngredient.min_stock === null ||
+    masterIngredient.min_stock === undefined
+  ) {
+    return {
+      ok: false,
+      code: "DATABASE_ERROR",
+      message: "Gagal membaca stok minimum aktual dari data master bahan baku.",
+    };
+  }
 
-  return {
-    ok: true,
-    message: normalized.idempotent_replay
-      ? `Penyesuaian stok "${normalized.ingredient_name}" sudah tercatat sebelumnya (idempoten).`
-      : `Stok "${normalized.ingredient_name}" berhasil disesuaikan menjadi ${normalized.stock_after} ${normalized.unit}.`,
-    data: normalized,
-  };
+  try {
+    const actualMinStock = roundQuantity3(masterIngredient.min_stock);
+
+    const parseNumericField = (val: unknown, name: string): number => {
+      if (val === null || val === undefined) {
+        throw new Error(`Kolom numerik "${name}" tidak ditemukan pada respons database.`);
+      }
+      if (typeof val !== "number" && typeof val !== "string") {
+        throw new Error(`Format data numerik "${name}" tidak valid.`);
+      }
+      return roundQuantity3(val);
+    };
+
+    const quantityDelta = parseNumericField(rpcResult.quantity_delta, "quantity_delta");
+    const stockBefore = parseNumericField(rpcResult.stock_before, "stock_before");
+    const stockAfter = parseNumericField(rpcResult.stock_after, "stock_after");
+    const reservedStock =
+      rpcResult.reserved_stock !== null && rpcResult.reserved_stock !== undefined
+        ? parseNumericField(rpcResult.reserved_stock, "reserved_stock")
+        : 0;
+    const availableStock =
+      rpcResult.available_stock !== null && rpcResult.available_stock !== undefined
+        ? parseNumericField(rpcResult.available_stock, "available_stock")
+        : Math.max(0, stockAfter - reservedStock);
+
+    const normalized: StockAdjustmentResultData = {
+      movement_id: String(rpcResult.movement_id),
+      ingredient_id: String(rpcResult.ingredient_id ?? ingredientId),
+      ingredient_name: String(rpcResult.ingredient_name ?? ""),
+      unit: rpcResult.unit as IngredientUnit,
+      movement_type: rpcResult.movement_type as ManualStockMovementType,
+      quantity_delta: quantityDelta,
+      stock_before: stockBefore,
+      stock_after: stockAfter,
+      current_stock: stockAfter,
+      reserved_stock: reservedStock,
+      available_stock: availableStock,
+      min_stock: actualMinStock,
+      is_low_stock: Boolean(rpcResult.is_low_stock),
+      reason: String(rpcResult.reason ?? reason),
+      idempotent_replay: Boolean(rpcResult.idempotent_replay),
+      created_at: String(rpcResult.created_at ?? new Date().toISOString()),
+    };
+
+    revalidateInventoryPaths();
+
+    return {
+      ok: true,
+      message: normalized.idempotent_replay
+        ? `Penyesuaian stok "${normalized.ingredient_name}" sudah tercatat sebelumnya (idempoten).`
+        : `Stok "${normalized.ingredient_name}" berhasil disesuaikan menjadi ${normalized.stock_after} ${normalized.unit}.`,
+      data: normalized,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      code: "DATABASE_ERROR",
+      message:
+        err instanceof Error
+          ? `Gagal memproses data penyesuaian stok: ${err.message}`
+          : "Gagal memproses data penyesuaian stok dari database.",
+    };
+  }
 }
 
 /**

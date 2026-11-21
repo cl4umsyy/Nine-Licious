@@ -420,14 +420,101 @@ runTest("6. Validasi filter laporan pemakaian bahan baku", () => {
   );
 });
 
-runTest("7. Aritmetika mili-unit numeric(12,3) bebas kesalahan floating-point", () => {
+runTest("7. Aritmetika mili-unit numeric(12,3) bebas kesalahan floating-point & pengujian tipe", () => {
   assert.equal(calculations.toMilliUnits("0.1") + calculations.toMilliUnits("0.2"), 300);
   assert.equal(calculations.fromMilliUnits(300), 0.3);
+
+  // 1. Integer (number & string)
+  assert.equal(calculations.roundQuantity3(5), 5);
+  assert.equal(calculations.roundQuantity3("5"), 5);
+  assert.equal(calculations.roundQuantity3(0), 0);
+  assert.equal(calculations.roundQuantity3("0"), 0);
+
+  // 2. Decimal (number & string)
+  assert.equal(calculations.roundQuantity3(1.234), 1.234);
+  assert.equal(calculations.roundQuantity3("1.234"), 1.234);
   assert.equal(calculations.roundQuantity3("1.005"), 1.005);
   assert.equal(calculations.roundQuantity3("1.0055"), 1.006);
+  assert.equal(calculations.roundQuantity3(-2.345), -2.345);
   assert.equal(calculations.roundQuantity3("-2.345"), -2.345);
-  assert.throws(() => calculations.toMilliUnits(NaN));
-  assert.throws(() => calculations.toMilliUnits(Infinity));
+
+  // 3. String numerik
+  assert.equal(calculations.roundQuantity3("  0.500  "), 0.5);
+  assert.equal(calculations.roundQuantity3("+10.5"), 10.5);
+
+  // 4. Null & Undefined ditangani secara aman (melempar Error deskriptif, bukan TypeError .trim())
+  assert.throws(
+    () => calculations.toMilliUnits(null),
+    /Nilai kuantitas tidak boleh kosong/,
+  );
+  assert.throws(
+    () => calculations.toMilliUnits(undefined),
+    /Nilai kuantitas tidak boleh kosong/,
+  );
+  assert.throws(
+    () => calculations.roundQuantity3(null),
+    /Nilai kuantitas tidak boleh kosong/,
+  );
+  assert.throws(
+    () => calculations.roundQuantity3(undefined),
+    /Nilai kuantitas tidak boleh kosong/,
+  );
+
+  // 5. String kosong & spasi
+  assert.throws(
+    () => calculations.toMilliUnits(""),
+    /Nilai kuantitas tidak boleh berupa string kosong/,
+  );
+  assert.throws(
+    () => calculations.toMilliUnits("   "),
+    /Nilai kuantitas tidak boleh berupa string kosong/,
+  );
+  assert.throws(
+    () => calculations.roundQuantity3(""),
+    /Nilai kuantitas tidak boleh berupa string kosong/,
+  );
+  assert.throws(
+    () => calculations.roundQuantity3("   "),
+    /Nilai kuantitas tidak boleh berupa string kosong/,
+  );
+
+  // 6. Input numerik tidak valid (NaN, Infinity, string non-angka, tipe selain number/string)
+  assert.throws(
+    () => calculations.toMilliUnits(NaN),
+    /Nilai kuantitas tidak valid/,
+  );
+  assert.throws(
+    () => calculations.toMilliUnits(Infinity),
+    /Nilai kuantitas tidak valid/,
+  );
+  assert.throws(
+    () => calculations.roundQuantity3(NaN),
+    /Nilai kuantitas tidak valid/,
+  );
+  assert.throws(
+    () => calculations.roundQuantity3(Infinity),
+    /Nilai kuantitas tidak valid/,
+  );
+  assert.throws(
+    () => calculations.toMilliUnits("abc"),
+    /Format angka desimal tidak valid/,
+  );
+  assert.throws(
+    () => calculations.roundQuantity3("abc"),
+    /Format angka desimal tidak valid/,
+  );
+  assert.throws(
+    () => calculations.toMilliUnits("12.34.56"),
+    /Format angka desimal tidak valid/,
+  );
+  assert.throws(
+    () => calculations.roundQuantity3({}),
+    /Format angka desimal tidak valid/,
+  );
+  assert.throws(
+    () => calculations.roundQuantity3(true),
+    /Format angka desimal tidak valid/,
+  );
 });
 
 runTest("8. Perhitungan kebutuhan bahan 1 produk (calculateProductIngredientNeeds)", () => {
