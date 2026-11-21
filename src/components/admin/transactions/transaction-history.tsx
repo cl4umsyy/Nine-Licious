@@ -9,6 +9,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  Download,
   Eye,
   FileText,
   Filter,
@@ -67,6 +68,9 @@ import {
   getAdminTransactionDetailAction,
   getAdminTransactionsAction,
 } from "@/lib/transactions/actions";
+import { exportTransactionsCsvAction } from "@/lib/export/actions";
+import { downloadCsvInBrowser } from "@/lib/export/csv";
+import { toast } from "sonner";
 import type {
   OrderStatus,
   OrderType,
@@ -234,6 +238,44 @@ export function TransactionHistory({
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setDebouncedSearch(search);
+  };
+
+  const [isExporting, setIsExporting] = useState(false);
+
+  const handleExportCsv = async () => {
+    setIsExporting(true);
+    try {
+      const res = await exportTransactionsCsvAction({
+        search: debouncedSearch.trim() || undefined,
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
+        paymentStatus: paymentStatus as PaymentStatus | "all",
+        orderStatus: orderStatus as OrderStatus | "all",
+        paymentMethod: paymentMethod as TransactionPaymentMethodFilter,
+        orderType: orderType as OrderType | "all",
+        cashierId: cashierId !== "all" ? cashierId : undefined,
+      });
+
+      if (res.ok && res.csvContent && res.filename) {
+        downloadCsvInBrowser(res.filename, res.csvContent);
+        if (res.isTruncated) {
+          toast.warning(
+            res.message ||
+              `Data dibatasi ${res.exportedCount?.toLocaleString("id-ID")} dari ${res.totalMatching?.toLocaleString("id-ID")} transaksi.`,
+          );
+        } else {
+          toast.success(
+            res.message || "Riwayat transaksi berhasil diekspor ke CSV.",
+          );
+        }
+      } else {
+        toast.error(res.message || "Gagal mengekspor riwayat transaksi.");
+      }
+    } catch {
+      toast.error("Terjadi kesalahan sistem saat mengekspor data.");
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   const isRefreshing = isPending || isLoading;
@@ -413,6 +455,20 @@ export function TransactionHistory({
                 disabled={isRefreshing}
               >
                 Kustom
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleExportCsv}
+                disabled={isRefreshing || isExporting}
+                className="h-8 text-xs rounded-xl gap-1.5 font-medium ml-1"
+              >
+                {isExporting ? (
+                  <Loader2 className="size-3.5 animate-spin text-primary" />
+                ) : (
+                  <Download className="size-3.5 text-primary" />
+                )}
+                <span>Export CSV</span>
               </Button>
             </div>
           </div>

@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   Clock,
   CreditCard,
+  Download,
   Info,
   Loader2,
   Package,
@@ -42,6 +43,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { getComprehensiveReportAction } from "@/lib/reports/actions";
+import { exportSalesReportCsvAction } from "@/lib/export/actions";
+import { downloadCsvInBrowser } from "@/lib/export/csv";
 import {
   getJakartaDateDaysAgo,
   getJakartaDateToday,
@@ -92,8 +95,26 @@ export function ReportsDashboard({
   const [endDate, setEndDate] = useState<string>(defaultEndDate);
   const [activeTab, setActiveTab] = useState<ReportTab>("sales");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
 
   const [isPending, startTransition] = useTransition();
+
+  const handleExportCsv = async () => {
+    setIsExporting(true);
+    try {
+      const res = await exportSalesReportCsvAction({ startDate, endDate });
+      if (res.ok && res.csvContent && res.filename) {
+        downloadCsvInBrowser(res.filename, res.csvContent);
+        toast.success("Laporan penjualan berhasil diekspor ke CSV.");
+      } else {
+        toast.error(res.message || "Gagal mengekspor laporan.");
+      }
+    } catch {
+      toast.error("Terjadi kesalahan saat mengekspor laporan.");
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   const handleApplyFilter = (
     preset: DatePreset,
@@ -209,6 +230,21 @@ export function ReportsDashboard({
           </div>
 
           <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleExportCsv}
+              disabled={isPending || isExporting}
+              className="gap-1.5"
+            >
+              {isExporting ? (
+                <Loader2 className="size-3.5 animate-spin text-primary" />
+              ) : (
+                <Download className="size-3.5 text-primary" />
+              )}
+              Export CSV
+            </Button>
             <Button
               type="button"
               variant="outline"

@@ -7,6 +7,7 @@ import {
   ArrowUpCircle,
   CheckCircle2,
   Clock,
+  Download,
   Eye,
   Filter,
   History,
@@ -60,6 +61,9 @@ import {
   getShiftSummaryAction,
   openShiftAction,
 } from "@/lib/shifts/actions";
+import { exportShiftsCsvAction } from "@/lib/export/actions";
+import { downloadCsvInBrowser } from "@/lib/export/csv";
+import { getJakartaDateDaysAgo, getJakartaDateToday } from "@/lib/reports/calculations";
 import type {
   CashMovement,
   CashMovementType,
@@ -278,6 +282,47 @@ export function AdminShiftManager({
     }
 
     setIsLoadingDetail(false);
+  };
+
+  const [isExporting, setIsExporting] = useState(false);
+
+  const handleExportCsv = async () => {
+    setIsExporting(true);
+    try {
+      let start: string | undefined;
+      let end: string | undefined;
+      if (dateFilter === "today") {
+        start = getJakartaDateToday();
+        end = getJakartaDateToday();
+      } else if (dateFilter === "7d") {
+        start = getJakartaDateDaysAgo(7);
+        end = getJakartaDateToday();
+      } else if (dateFilter === "30d") {
+        start = getJakartaDateDaysAgo(30);
+        end = getJakartaDateToday();
+      } else if (dateFilter === "custom" && customDate) {
+        start = customDate;
+        end = customDate;
+      }
+
+      const res = await exportShiftsCsvAction({
+        cashierId: cashierFilter,
+        status: statusFilter,
+        startDate: start,
+        endDate: end,
+      });
+
+      if (res.ok && res.csvContent && res.filename) {
+        downloadCsvInBrowser(res.filename, res.csvContent);
+        toast.success("Data rekonsiliasi shift berhasil diekspor ke CSV.");
+      } else {
+        toast.error(res.message || "Gagal mengekspor data shift.");
+      }
+    } catch {
+      toast.error("Terjadi kesalahan saat mengekspor data shift.");
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   return (
@@ -542,6 +587,21 @@ export function AdminShiftManager({
                 Reset
               </Button>
             )}
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleExportCsv}
+              disabled={isExporting}
+              className="h-8.5 px-3 text-xs font-semibold rounded-xl gap-1.5"
+            >
+              {isExporting ? (
+                <Loader2 className="size-3.5 animate-spin text-primary" />
+              ) : (
+                <Download className="size-3.5 text-primary" />
+              )}
+              Export CSV
+            </Button>
           </div>
         </CardHeader>
 
@@ -757,7 +817,7 @@ export function AdminShiftManager({
               <div>
                 <DialogTitle className="text-base font-bold flex items-center gap-2">
                   <Receipt className="size-5 text-primary" />
-                  Audit Detail Shift &amp; Rekonsiliasi Kas
+                  Audit Detail Shift &amp; Rekonsiliasi Kas (Detail Mutasi Kas Shift)
                 </DialogTitle>
                 <DialogDescription className="text-xs mt-1">
                   Kasir: <strong>{selectedShiftForDetail?.cashier?.full_name}</strong> (@{selectedShiftForDetail?.cashier?.username}) • ID Shift: <span className="font-mono text-[11px]">{selectedShiftForDetail?.id}</span>

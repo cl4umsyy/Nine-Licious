@@ -282,6 +282,12 @@ export default async function AdminDashboardPage() {
               </Link>
             </Button>
             <Button asChild variant="secondary" size="sm">
+              <Link href="/admin/audit">
+                <ShieldCheck />
+                Audit Explorer
+              </Link>
+            </Button>
+            <Button asChild variant="secondary" size="sm">
               <Link href="/admin/users">
                 <UserPlus />
                 Kelola pengguna

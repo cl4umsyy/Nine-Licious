@@ -8,6 +8,7 @@ import {
   MapPin,
   MonitorPlay,
   Percent,
+  ShieldCheck,
   ShoppingCart,
   Users,
   UtensilsCrossed,
@@ -80,6 +81,13 @@ export const NAV_ITEMS: NavItem[] = [
     label: "Riwayat Transaksi",
     description: "Audit seluruh riwayat pesanan, pembayaran, refund, dan rekonsiliasi shift.",
     icon: History,
+    roles: ["admin"],
+  },
+  {
+    href: "/admin/audit",
+    label: "Audit Explorer",
+    description: "Inspeksi log aktivitas pengguna, mutasi sistem, dan kepatuhan keamanan.",
+    icon: ShieldCheck,
     roles: ["admin"],
   },
   {
