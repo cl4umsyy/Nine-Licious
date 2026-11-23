@@ -674,8 +674,12 @@ function PaymentModalContent({
       }
 
       if (res.data?.wasAlreadySettled) {
-        toast.success(res.message);
-        onPaymentSuccess(order.id, res.data.isSettled);
+        toast.info(res.message);
+        if (res.data.isSettled) {
+          onPaymentSuccess(order.id, true);
+        } else {
+          await refreshPaymentSummary();
+        }
         return;
       }
 
@@ -1249,7 +1253,7 @@ function PaymentModalContent({
                       className="h-10 px-4 text-xs font-bold gap-2 rounded-xl"
                     >
                       <RefreshCw className={`size-3.5 shrink-0 ${isVerifyingMidtrans ? "animate-spin" : ""}`} />
-                      <span>{isVerifyingMidtrans ? "Memverifikasi..." : "Verifikasi & Lepas Reservasi"}</span>
+                      <span>{isVerifyingMidtrans ? "Memeriksa Status..." : "Cek Status Midtrans"}</span>
                     </Button>
                     <Button
                       type="button"

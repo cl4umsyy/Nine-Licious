@@ -106,7 +106,7 @@ export async function reconcileActiveMidtransPayment({
   const { data: latestMidtransTx, error: txErr } = await adminClient
     .from("midtrans_transactions")
     .select(
-      "id, midtrans_order_id, gross_amount, lifecycle_status, snap_token, snap_redirect_url, payment_expires_at",
+      "id, midtrans_order_id, gross_amount, lifecycle_status, snap_token, snap_redirect_url, payment_expires_at, sanitized_response",
     )
     .eq("order_id", orderId)
     .order("created_at", { ascending: false })
@@ -279,6 +279,51 @@ export async function reconcileActiveMidtransPayment({
   const rawStatus = (midtransData.transaction_status || "").trim().toLowerCase();
   const fraudStatus = (midtransData.fraud_status || "").trim().toLowerCase();
 
+  // e. Validasi Fraud Status: jika status settlement namun fraud_status explicitly reject / challenge / deny
+  if (rawStatus === "settlement" && fraudStatus && fraudStatus !== "accept") {
+    return {
+      ok: false,
+      isSettled: false,
+      orderNumber: order.order_number,
+      error: `Status fraud transaksi Midtrans (${fraudStatus}) tidak valid untuk settlement.`,
+    };
+  }
+
+  // f. Validasi Transaction ID
+  const transactionId =
+    typeof midtransData.transaction_id === "string"
+      ? midtransData.transaction_id.trim()
+      : "";
+
+  const isPaid = isMidtransPaidStatus(rawStatus, fraudStatus);
+
+  if (isPaid && !transactionId) {
+    return {
+      ok: false,
+      isSettled: false,
+      orderNumber: order.order_number,
+      error: "Respons status Midtrans tidak memiliki transaction_id yang valid.",
+    };
+  }
+
+  // g. Validasi konsistensi Transaction ID dengan catatan lokal jika sebelumnya pernah tersimpan
+  const existingTxId =
+    typeof latestMidtransTx.sanitized_response === "object" &&
+    latestMidtransTx.sanitized_response !== null &&
+    "transaction_id" in latestMidtransTx.sanitized_response &&
+    typeof (latestMidtransTx.sanitized_response as { transaction_id?: unknown }).transaction_id === "string"
+      ? (latestMidtransTx.sanitized_response as { transaction_id: string }).transaction_id.trim()
+      : null;
+
+  if (existingTxId && transactionId && existingTxId !== transactionId) {
+    return {
+      ok: false,
+      isSettled: false,
+      orderNumber: order.order_number,
+      error: `Transaction ID Midtrans (${transactionId}) tidak cocok dengan catatan lokal (${existingTxId}).`,
+    };
+  }
+
   // Sanitasi payload dari signature_key sebelum diteruskan ke settlement engine
   const sanitizedStatusFields = Object.fromEntries(
     Object.entries(midtransData).filter(([k]) => k !== "signature_key"),
@@ -292,12 +337,11 @@ export async function reconcileActiveMidtransPayment({
     transaction_status: rawStatus,
     fraud_status: fraudStatus,
     currency: reportedCurrency,
-    transaction_id: midtransData.transaction_id,
+    transaction_id: transactionId,
     payment_type: midtransData.payment_type,
   };
 
   // 5. Pemetaan Status & Penanganan Rekonsiliasi
-  const isPaid = isMidtransPaidStatus(rawStatus, fraudStatus);
 
   if (isPaid) {
     const settleResult = await settleVerifiedMidtransStatus(verifiedPayload);
@@ -329,8 +373,11 @@ export async function reconcileActiveMidtransPayment({
     ]);
 
     const isOrderFullySettled =
-      refreshedOrder?.payment_status === "paid" ||
-      refreshedOrder?.status === "paid";
+      Boolean(
+        (refreshedOrder?.payment_status === "paid" ||
+          refreshedOrder?.status === "paid") &&
+        Number(refreshedOrder?.paid_total) >= Number(order.grand_total),
+      );
     const isTxSettled = refreshedTx?.lifecycle_status === "settled";
 
     return {

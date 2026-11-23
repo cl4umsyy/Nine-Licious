@@ -136,6 +136,13 @@ function ReceiptModalContent({
     data?.payments.reduce((acc, p) => acc + (p.change_amount || 0), 0) ?? 0;
   const manualDiscounts =
     data?.discounts.filter((d) => d.scope === "manual") ?? [];
+  const isFullySettled = data
+    ? data.order.payment_status === "paid" ||
+      data.order.paid_total >= data.order.grand_total
+    : false;
+  const remainingAmount = data
+    ? Math.max(0, data.order.grand_total - data.order.paid_total)
+    : 0;
 
   return (
     <>
@@ -147,7 +154,12 @@ function ReceiptModalContent({
               Struk Pembayaran Digital
             </DialogTitle>
             <DialogDescription className="text-xs mt-0.5">
-              Preview & cetak struk thermal 58mm / 80mm
+              {data
+                ? isFullySettled
+                  ? "Struk Pelunasan Transaksi"
+                  : "Struk Pembayaran Sebagian"
+                : "Preview & cetak struk thermal"}{" "}
+              • Thermal {paperWidth}mm
             </DialogDescription>
           </div>
 
@@ -242,6 +254,20 @@ function ReceiptModalContent({
                   {data.restaurant.receipt_header}
                 </p>
               ) : null}
+            </div>
+
+            {/* Status Pembayaran Transaksi */}
+            <div className="text-center my-2">
+              <span
+                className={cn(
+                  "inline-block rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider",
+                  isFullySettled
+                    ? "bg-emerald-100 text-emerald-800 print:border print:border-black print:bg-white print:text-black"
+                    : "bg-amber-100 text-amber-900 print:border print:border-black print:bg-white print:text-black",
+                )}
+              >
+                {isFullySettled ? "— LUNAS —" : "— PEMBAYARAN SEBAGIAN —"}
+              </span>
             </div>
 
             <Separator className="my-3 border-dashed border-neutral-400" />
@@ -429,6 +455,12 @@ function ReceiptModalContent({
                 <span>TOTAL DIBAYAR:</span>
                 <span>Rp {data.order.paid_total.toLocaleString("id-ID")}</span>
               </div>
+              {!isFullySettled && remainingAmount > 0 ? (
+                <div className="flex justify-between font-bold pt-0.5 text-neutral-800">
+                  <span>SISA TAGIHAN:</span>
+                  <span>Rp {remainingAmount.toLocaleString("id-ID")}</span>
+                </div>
+              ) : null}
             </div>
 
             {/* Detail Refund Jika Ada */}

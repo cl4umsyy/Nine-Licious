@@ -108,6 +108,7 @@ export type ReceiptData = {
     service_total: number;
     grand_total: number;
     paid_total: number;
+    remaining_balance?: number;
     refunded_total: number;
     pending_refund_total: number;
     net_paid: number;

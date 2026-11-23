@@ -3,6 +3,7 @@ import "server-only";
 import { createHash } from "node:crypto";
 import { getMidtransConfig } from "./config";
 import { verifyMidtransWebhookSignature } from "./signature";
+import { isMidtransPaidStatus } from "./status";
 import type { ProcessWebhookResult } from "./types";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
@@ -77,6 +78,19 @@ async function executeVerifiedMidtransSettlement(
       fingerprint: "",
       processingResult: "failed",
       error: "Payload notifikasi Midtrans tidak lengkap.",
+    };
+  }
+
+  const isPaid = isMidtransPaidStatus(
+    transactionStatus,
+    typeof payload.fraud_status === "string" ? payload.fraud_status : undefined,
+  );
+  if (isPaid && !transactionId.trim()) {
+    return {
+      ok: false,
+      fingerprint: "",
+      processingResult: "failed",
+      error: "Payload pembayaran Midtrans tidak memiliki transaction_id yang valid.",
     };
   }
 

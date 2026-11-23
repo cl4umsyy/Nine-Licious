@@ -12,9 +12,16 @@ export function isMidtransPaidStatus(
   transactionStatus: MidtransTransactionStatus,
   fraudStatus?: string | null,
 ): boolean {
-  if (transactionStatus === "settlement") {
-    return true;
+  const normFraud = (fraudStatus || "").trim().toLowerCase();
+
+  // If fraud_status is explicitly challenge or deny, payment is NOT paid
+  if (normFraud === "challenge" || normFraud === "deny") {
+    return false;
   }
 
-  return transactionStatus === "capture" && fraudStatus === "accept";
+  if (transactionStatus === "settlement") {
+    return !normFraud || normFraud === "accept";
+  }
+
+  return transactionStatus === "capture" && normFraud === "accept";
 }

@@ -426,6 +426,12 @@ async function buildOrderReceiptDataFallback(
     return null;
   }
 
+  const paidTotal = Number(order.paid_total) || 0;
+  // Sesuai aturan: Unpaid, Pending, Expired, atau Pembatalan tanpa pembayaran tidak menghasilkan struk
+  if (paidTotal <= 0 || order.payment_status === "unpaid") {
+    return null;
+  }
+
   const [
     settingsRes,
     tableRes,
@@ -543,7 +549,6 @@ async function buildOrderReceiptDataFallback(
     .reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
 
   const settings = settingsRes.data;
-  const paidTotal = Number(order.paid_total) || 0;
 
   return {
     restaurant: {
@@ -580,6 +585,7 @@ async function buildOrderReceiptDataFallback(
       service_total: Number(order.service_total) || 0,
       grand_total: Number(order.grand_total) || 0,
       paid_total: paidTotal,
+      remaining_balance: Math.max(0, (Number(order.grand_total) || 0) - paidTotal),
       refunded_total: completedRefundTotal,
       pending_refund_total: pendingRefundTotal,
       net_paid: paidTotal - completedRefundTotal,
@@ -663,6 +669,43 @@ export async function getOrderReceiptDataAction(
     return { ok: false, message: "Klien database tidak tersedia." };
   }
 
+  // 2. Proteksi Ketat: Validasi status pesanan di database terlebih dahulu (Rule 5: Unpaid/Pending/Expired tidak menghasilkan struk)
+  const { data: orderCheck, error: checkErr } = await supabase
+    .from("orders")
+    .select("id, order_number, status, payment_status, paid_total, grand_total")
+    .eq("id", orderId)
+    .maybeSingle<{
+      id: string;
+      order_number: string;
+      status: string;
+      payment_status: string;
+      paid_total: number;
+      grand_total: number;
+    }>();
+
+  if (checkErr || !orderCheck) {
+    return { ok: false, message: "Pesanan tidak ditemukan di database." };
+  }
+
+  const paidTotal = Number(orderCheck.paid_total) || 0;
+
+  // Aturan F2 & F5: Unpaid, Pending, Expired, atau Pesanan Dibatalkan tanpa pembayaran TIDAK menghasilkan struk
+  if (paidTotal <= 0 || orderCheck.payment_status === "unpaid") {
+    return {
+      ok: false,
+      message:
+        "Pesanan belum memiliki riwayat pembayaran yang terverifikasi (Unpaid). Struk pembayaran hanya dapat dicetak setelah ada pembayaran yang berhasil tercatat.",
+    };
+  }
+
+  if (orderCheck.status === "cancelled" && paidTotal <= 0) {
+    return {
+      ok: false,
+      message:
+        "Pesanan telah dibatalkan tanpa pembayaran. Struk pembayaran tidak dapat diterbitkan.",
+    };
+  }
+
   const { data: rpcResult, error: rpcErr } = await supabase.rpc(
     "get_order_receipt_data",
     {
@@ -671,10 +714,25 @@ export async function getOrderReceiptDataAction(
   );
 
   if (!rpcErr && rpcResult) {
+    const rawData = rpcResult as unknown as ReceiptData;
+    // Proteksi ganda pada hasil RPC
+    if (Number(rawData.order.paid_total) <= 0 || rawData.order.payment_status === "unpaid") {
+      return {
+        ok: false,
+        message:
+          "Pesanan belum memiliki riwayat pembayaran yang terverifikasi. Struk pembayaran tidak dapat diterbitkan.",
+      };
+    }
+    if (rawData.order.remaining_balance === undefined) {
+      rawData.order.remaining_balance = Math.max(
+        0,
+        Number(rawData.order.grand_total) - Number(rawData.order.paid_total),
+      );
+    }
     return {
       ok: true,
       message: "Data struk berhasil dimuat.",
-      data: rpcResult as unknown as ReceiptData,
+      data: rawData,
     };
   }
 
@@ -1136,22 +1194,38 @@ export async function cancelActiveMidtransReservationAction(
 
     // Jika ternyata SUDAH LUNAS di Midtrans -> JANGAN dibatalkan, langsung rekonsiliasi!
     if (isMidtransPaidStatus(rawStatus, fraudStatus)) {
-      const reconcileRes = await reconcileActiveMidtransPayment({ orderId });
+      await reconcileActiveMidtransPayment({ orderId });
       const postState = await loadOrderReservationState(order.id);
       revalidatePath("/pos");
       revalidatePath("/pos/orders");
       revalidatePath("/kitchen");
 
+      const adminClient = createSupabaseAdminClient();
+      const { data: dbOrder } = adminClient
+        ? await adminClient
+            .from("orders")
+            .select("payment_status, paid_total, grand_total")
+            .eq("id", order.id)
+            .maybeSingle()
+        : { data: null };
+
+      const isActuallySettledInDb = Boolean(
+        dbOrder &&
+        dbOrder.payment_status === "paid" &&
+        Number(dbOrder.paid_total) >= Number(dbOrder.grand_total)
+      );
+
       return {
         ok: true,
-        message:
-          "Pembatalan dihentikan: Transaksi Midtrans ini sudah LUNAS terverifikasi di Midtrans. Pembayaran ganda berhasil dicegah.",
+        message: isActuallySettledInDb
+          ? "Pembatalan dihentikan: Transaksi Midtrans ini sudah LUNAS terverifikasi di Midtrans. Pembayaran ganda berhasil dicegah."
+          : "Transaksi berstatus settlement di Midtrans namun sinkronisasi database sedang berlangsung. Pembatalan dicegah.",
         data: {
           orderId: order.id,
           orderNumber: order.order_number,
           released: false,
           wasAlreadySettled: true,
-          isSettled: reconcileRes.isSettled,
+          isSettled: isActuallySettledInDb,
           reservedAmount: postState.reservedAmount,
           availableForCashAmount: 0,
         },
@@ -1429,12 +1503,22 @@ export async function getOrderPaymentStatusAction(
 
         if (refreshedOrder) {
           currentSettled =
-            refreshedOrder.payment_status === "paid" ||
-            refreshedOrder.status === "paid";
+            (refreshedOrder.payment_status === "paid" ||
+              refreshedOrder.status === "paid") &&
+            Number(refreshedOrder.paid_total) >= Number(refreshedOrder.grand_total);
           currentPaidTotal = refreshedOrder.paid_total;
           currentStatus = refreshedOrder.status;
           currentPaymentStatus = refreshedOrder.payment_status;
           order.queue_number = refreshedOrder.queue_number;
+        }
+
+        if (
+          !currentSettled &&
+          (reconcileResult.midtransStatus === "settlement" ||
+            reconcileResult.midtransStatus === "capture")
+        ) {
+          reconciliationMessage =
+            "Pembayaran telah terverifikasi di Midtrans, namun sinkronisasi database pelunasan sedang diproses. Silakan periksa kembali beberapa saat lagi.";
         }
 
         if (currentSettled) {

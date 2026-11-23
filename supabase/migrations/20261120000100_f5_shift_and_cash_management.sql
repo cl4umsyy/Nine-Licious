@@ -1076,7 +1076,6 @@ begin
       status = 'paid',
       payment_status = 'paid',
       kds_status = 'queued',
-      paid_at = now(),
       queue_date = v_queue_date,
       queue_number = v_queue_number,
       updated_at = now()
