@@ -40,6 +40,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { isMissingServingSchemaError } from "@/lib/orders/serving";
 import {
+  aggregateKdsPriorItems,
   formatSafeReceiptError,
   normalizeReceiptWidth,
 } from "@/lib/payments/receipt";
@@ -428,39 +429,54 @@ export async function calculateRemainingQueueItems(
     created_at: string;
     queue_date?: string | null;
     queue_number?: string | null;
+    order_number?: string | null;
+    kds_status?: string | null;
+    served_at?: string | null;
   },
 ): Promise<number> {
-  if (!targetOrder.id || !targetOrder.created_at) {
+  if (!targetOrder.id) {
     return 0;
   }
 
   try {
-    let query = supabase
+    let currentTarget = targetOrder;
+    if (!currentTarget.kds_status || currentTarget.served_at === undefined) {
+      const { data: freshTarget } = await supabase
+        .from("orders")
+        .select("id, order_number, queue_number, queue_date, kds_status, served_at, created_at")
+        .eq("id", targetOrder.id)
+        .maybeSingle();
+
+      if (freshTarget) {
+        currentTarget = {
+          ...targetOrder,
+          ...freshTarget,
+        };
+      }
+    }
+
+    if (currentTarget.served_at || currentTarget.kds_status === "ready") {
+      return 0;
+    }
+
+    const query = supabase
       .from("orders")
-      .select("id, created_at, queue_number, order_items(quantity)")
+      .select("id, order_number, queue_number, queue_date, kds_status, created_at, order_items(quantity)")
       .eq("status", "paid")
       .in("kds_status", ["queued", "preparing"])
       .is("served_at", null)
-      .neq("id", targetOrder.id);
-
-    if (targetOrder.queue_date) {
-      query = query.eq("queue_date", targetOrder.queue_date);
-    }
+      .neq("id", currentTarget.id);
 
     const { data: ordersData, error: ordersErr } = await query;
 
     if (ordersErr) {
       if (isMissingServingSchemaError(ordersErr)) {
-        let fallbackQuery = supabase
+        const fallbackQuery = supabase
           .from("orders")
-          .select("id, created_at, queue_number, order_items(quantity)")
+          .select("id, order_number, queue_number, queue_date, kds_status, created_at, order_items(quantity)")
           .eq("status", "paid")
           .in("kds_status", ["queued", "preparing"])
-          .neq("id", targetOrder.id);
-
-        if (targetOrder.queue_date) {
-          fallbackQuery = fallbackQuery.eq("queue_date", targetOrder.queue_date);
-        }
+          .neq("id", currentTarget.id);
 
         const { data: fallbackOrders, error: fbErr } = await fallbackQuery;
         if (fbErr || !fallbackOrders) {
@@ -468,7 +484,7 @@ export async function calculateRemainingQueueItems(
           return 0;
         }
 
-        return aggregatePriorOrderItems(fallbackOrders, targetOrder);
+        return aggregateKdsPriorItems(fallbackOrders, currentTarget);
       }
 
       console.error("[receipt] Gagal menghitung sisa antrean KDS:", ordersErr.message);
@@ -479,7 +495,7 @@ export async function calculateRemainingQueueItems(
       return 0;
     }
 
-    return aggregatePriorOrderItems(ordersData, targetOrder);
+    return aggregateKdsPriorItems(ordersData, currentTarget);
   } catch (err: unknown) {
     console.error(
       "[receipt] Eksepsi saat menghitung sisa antrean KDS:",
@@ -487,49 +503,6 @@ export async function calculateRemainingQueueItems(
     );
     return 0;
   }
-}
-
-function aggregatePriorOrderItems(
-  orders: Array<{
-    id: string;
-    created_at: string;
-    queue_number?: string | null;
-    order_items?: Array<{ quantity: number }> | null;
-  }>,
-  targetOrder: {
-    id: string;
-    created_at: string;
-    queue_number?: string | null;
-  },
-): number {
-  const targetCreatedAtMs = Date.parse(targetOrder.created_at);
-
-  let totalItems = 0;
-
-  for (const ord of orders) {
-    if (ord.id === targetOrder.id) continue;
-
-    const ordCreatedAtMs = Date.parse(ord.created_at);
-    if (!Number.isNaN(targetCreatedAtMs) && !Number.isNaN(ordCreatedAtMs)) {
-      if (ordCreatedAtMs > targetCreatedAtMs) {
-        continue;
-      }
-      if (ordCreatedAtMs === targetCreatedAtMs && targetOrder.queue_number && ord.queue_number) {
-        if (ord.queue_number >= targetOrder.queue_number) {
-          continue;
-        }
-      }
-    }
-
-    const items = ord.order_items;
-    if (items && Array.isArray(items)) {
-      for (const it of items) {
-        totalItems += Math.max(0, Number(it.quantity) || 0);
-      }
-    }
-  }
-
-  return totalItems;
 }
 
 /**
@@ -858,6 +831,7 @@ export async function getOrderReceiptDataAction(
     }
     const remainingQueueItems = await calculateRemainingQueueItems(supabase, {
       id: rawData.order.id,
+      order_number: rawData.order.order_number,
       created_at: rawData.order.created_at,
       queue_date: rawData.order.queue_date,
       queue_number: rawData.order.queue_number,
@@ -887,6 +861,7 @@ export async function getOrderReceiptDataAction(
     if (fallbackData) {
       const remainingQueueItems = await calculateRemainingQueueItems(supabase, {
         id: fallbackData.order.id,
+        order_number: fallbackData.order.order_number,
         created_at: fallbackData.order.created_at,
         queue_date: fallbackData.order.queue_date,
         queue_number: fallbackData.order.queue_number,
