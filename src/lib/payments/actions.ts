@@ -38,6 +38,7 @@ import type {
 } from "@/types/database";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { isMissingServingSchemaError } from "@/lib/orders/serving";
 import {
   formatSafeReceiptError,
   normalizeReceiptWidth,
@@ -406,6 +407,132 @@ export async function confirmMidtransRefundAction(rawInput: {
 }
 
 /**
+ * Menghitung sisa antrean menu (jumlah item menu) dari pesanan sebelumnya
+ * yang masih belum selesai disiapkan oleh dapur melalui Kitchen Display System (KDS).
+ *
+ * Aturan Perhitungan & KDS:
+ * 1. Menggunakan data antrean dan status pesanan aktual yang sama persis dengan KDS.
+ * 2. Hanya menghitung pesanan sebelumnya yang status = 'paid', kds_status in ('queued', 'preparing'),
+ *    dan belum disajikan (served_at IS NULL).
+ * 3. Menghitung akumulasi kuantitas (quantity) seluruh item menu dari pesanan-pesanan tersebut.
+ * 4. Item dari pesanan pelanggan sendiri (id == targetOrder.id) TIDAK ikut dihitung.
+ * 5. Item dari pesanan setelah pelanggan (created_at > targetOrder.created_at) TIDAK ikut dihitung.
+ * 6. Item dari pesanan yang sudah 'ready', 'completed', atau 'refunded' / 'cancelled' TIDAK dihitung.
+ * 7. Jika tidak ada item di depan pelanggan, mengembalikan 0.
+ * 8. Query tunggal efisien tanpa N+1 query.
+ */
+export async function calculateRemainingQueueItems(
+  supabase: NonNullable<Awaited<ReturnType<typeof createSupabaseServerClient>>>,
+  targetOrder: {
+    id: string;
+    created_at: string;
+    queue_date?: string | null;
+    queue_number?: string | null;
+  },
+): Promise<number> {
+  if (!targetOrder.id || !targetOrder.created_at) {
+    return 0;
+  }
+
+  try {
+    let query = supabase
+      .from("orders")
+      .select("id, created_at, queue_number, order_items(quantity)")
+      .eq("status", "paid")
+      .in("kds_status", ["queued", "preparing"])
+      .is("served_at", null)
+      .neq("id", targetOrder.id);
+
+    if (targetOrder.queue_date) {
+      query = query.eq("queue_date", targetOrder.queue_date);
+    }
+
+    const { data: ordersData, error: ordersErr } = await query;
+
+    if (ordersErr) {
+      if (isMissingServingSchemaError(ordersErr)) {
+        let fallbackQuery = supabase
+          .from("orders")
+          .select("id, created_at, queue_number, order_items(quantity)")
+          .eq("status", "paid")
+          .in("kds_status", ["queued", "preparing"])
+          .neq("id", targetOrder.id);
+
+        if (targetOrder.queue_date) {
+          fallbackQuery = fallbackQuery.eq("queue_date", targetOrder.queue_date);
+        }
+
+        const { data: fallbackOrders, error: fbErr } = await fallbackQuery;
+        if (fbErr || !fallbackOrders) {
+          console.error("[receipt] Gagal menghitung sisa antrean KDS (fallback):", fbErr?.message);
+          return 0;
+        }
+
+        return aggregatePriorOrderItems(fallbackOrders, targetOrder);
+      }
+
+      console.error("[receipt] Gagal menghitung sisa antrean KDS:", ordersErr.message);
+      return 0;
+    }
+
+    if (!ordersData || ordersData.length === 0) {
+      return 0;
+    }
+
+    return aggregatePriorOrderItems(ordersData, targetOrder);
+  } catch (err: unknown) {
+    console.error(
+      "[receipt] Eksepsi saat menghitung sisa antrean KDS:",
+      err instanceof Error ? err.message : err,
+    );
+    return 0;
+  }
+}
+
+function aggregatePriorOrderItems(
+  orders: Array<{
+    id: string;
+    created_at: string;
+    queue_number?: string | null;
+    order_items?: Array<{ quantity: number }> | null;
+  }>,
+  targetOrder: {
+    id: string;
+    created_at: string;
+    queue_number?: string | null;
+  },
+): number {
+  const targetCreatedAtMs = Date.parse(targetOrder.created_at);
+
+  let totalItems = 0;
+
+  for (const ord of orders) {
+    if (ord.id === targetOrder.id) continue;
+
+    const ordCreatedAtMs = Date.parse(ord.created_at);
+    if (!Number.isNaN(targetCreatedAtMs) && !Number.isNaN(ordCreatedAtMs)) {
+      if (ordCreatedAtMs > targetCreatedAtMs) {
+        continue;
+      }
+      if (ordCreatedAtMs === targetCreatedAtMs && targetOrder.queue_number && ord.queue_number) {
+        if (ord.queue_number >= targetOrder.queue_number) {
+          continue;
+        }
+      }
+    }
+
+    const items = ord.order_items;
+    if (items && Array.isArray(items)) {
+      for (const it of items) {
+        totalItems += Math.max(0, Number(it.quantity) || 0);
+      }
+    }
+  }
+
+  return totalItems;
+}
+
+/**
  * Fallback read-only builder untuk data struk ketika RPC `get_order_receipt_data`
  * mengalami error (mis. bug PL/pgSQL `record "v_table" is not assigned yet` pada
  * pesanan Takeaway dimana `table_id IS NULL`).
@@ -729,6 +856,15 @@ export async function getOrderReceiptDataAction(
         Number(rawData.order.grand_total) - Number(rawData.order.paid_total),
       );
     }
+    const remainingQueueItems = await calculateRemainingQueueItems(supabase, {
+      id: rawData.order.id,
+      created_at: rawData.order.created_at,
+      queue_date: rawData.order.queue_date,
+      queue_number: rawData.order.queue_number,
+    });
+    rawData.order.remaining_queue_items = remainingQueueItems;
+    rawData.order.queue_position = remainingQueueItems + 1;
+
     return {
       ok: true,
       message: "Data struk berhasil dimuat.",
@@ -749,6 +885,15 @@ export async function getOrderReceiptDataAction(
   try {
     const fallbackData = await buildOrderReceiptDataFallback(supabase, orderId);
     if (fallbackData) {
+      const remainingQueueItems = await calculateRemainingQueueItems(supabase, {
+        id: fallbackData.order.id,
+        created_at: fallbackData.order.created_at,
+        queue_date: fallbackData.order.queue_date,
+        queue_number: fallbackData.order.queue_number,
+      });
+      fallbackData.order.remaining_queue_items = remainingQueueItems;
+      fallbackData.order.queue_position = remainingQueueItems + 1;
+
       return {
         ok: true,
         message: "Data struk berhasil dimuat.",
@@ -921,6 +1066,259 @@ export async function createPosMidtransSnapAction(
     message: "Transaksi Midtrans Snap berhasil dibuat.",
     data: snapResult,
   };
+}
+
+/**
+ * Membuat Snap Token baru ketika token sebelumnya telah kedaluwarsa (attempt baru: -A2, -A3, dst).
+ * Pengaman Ketat:
+ * 1. Memeriksa status transaksi lama ke Midtrans Core API terlebih dahulu.
+ * 2. Jika transaksi lama ternyata SUDAH settlement di Midtrans, membatalkan pembuatan token baru
+ *    dan langsung merekonsiliasi pembayaran agar tidak terjadi double payment.
+ * 3. Jika transaksi lama belum settlement, menandai attempt lama sebagai expired dan melepaskan
+ *    alokasi lama sehingga kapasitas saldo tersedia untuk attempt baru.
+ * 4. Membuat token Snap baru dan mengembalikan token aktif untuk langsung ditampilkan ke pelanggan.
+ */
+export async function retryExpiredMidtransSnapAction(
+  rawInput: unknown,
+): Promise<PaymentActionResult<CreateSnapTransactionResult>> {
+  const cashierActor = await getCashierActor();
+  if (!cashierActor.ok) {
+    return { ok: false, message: cashierActor.message };
+  }
+
+  const parsed = createSnapPaymentSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      message: firstZodError(parsed.error),
+      fieldErrors: fieldErrorsFrom(parsed.error),
+    };
+  }
+
+  const input = parsed.data;
+
+  const adminClient = createSupabaseAdminClient();
+  if (!adminClient) {
+    return { ok: false, message: "Klien database tidak tersedia." };
+  }
+
+  const { data: order, error: orderErr } = await adminClient
+    .from("orders")
+    .select("id, order_number, status, payment_status, grand_total, paid_total")
+    .eq("id", input.orderId)
+    .maybeSingle();
+
+  if (orderErr || !order) {
+    return { ok: false, message: "Pesanan tidak ditemukan di database." };
+  }
+
+  if (order.status === "paid" || order.payment_status === "paid") {
+    return {
+      ok: false,
+      message: `Pesanan #${order.order_number} sudah berstatus lunas. Tidak dapat membuat token baru.`,
+    };
+  }
+
+  // Periksa attempt Midtrans aktif/terakhir
+  const { data: latestTx } = await adminClient
+    .from("midtrans_transactions")
+    .select("id, midtrans_order_id, gross_amount, lifecycle_status, payment_expires_at, snap_token")
+    .eq("order_id", order.id)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (latestTx && latestTx.midtrans_order_id) {
+    // 1. Verifikasi transaksi lama di Midtrans Core API
+    const statusCheck = await getMidtransStatus(latestTx.midtrans_order_id);
+
+    // ATURAN 5: Status tidak diketahui, timeout, atau gangguan API -> FAIL-CLOSED
+    if (!statusCheck.ok && statusCheck.httpStatus !== 404) {
+      return {
+        ok: false,
+        message: `Tidak dapat memverifikasi status transaksi lama ke Midtrans: ${statusCheck.error || "Gangguan koneksi API"}. Pembuatan token baru ditolak demi mencegah pembayaran ganda (fail-closed).`,
+      };
+    }
+
+    if (statusCheck.ok && statusCheck.status) {
+      const rawStatus = (statusCheck.status.transaction_status || "").trim().toLowerCase();
+      const fraudStatus = (statusCheck.status.fraud_status || "").trim().toLowerCase();
+
+      // ATURAN 1: Status settlement / capture+accept
+      if (isMidtransPaidStatus(rawStatus, fraudStatus)) {
+        // Transaksi lama sudah settlement! Rekonsiliasi & cegah token baru
+        await reconcileActiveMidtransPayment({ orderId: order.id });
+
+        const { data: refreshedOrder } = await adminClient
+          .from("orders")
+          .select("id, order_number, status, payment_status, grand_total, paid_total")
+          .eq("id", order.id)
+          .maybeSingle();
+
+        const isPaidInDb =
+          refreshedOrder &&
+          (refreshedOrder.payment_status === "paid" || refreshedOrder.status === "paid") &&
+          Number(refreshedOrder.paid_total) >= Number(refreshedOrder.grand_total);
+
+        return {
+          ok: false,
+          message: isPaidInDb
+            ? `Transaksi Midtrans sebelumnya SUDAH LUNAS terverifikasi di Midtrans dan database. Silakan muat ulang atau cetak struk.`
+            : `Transaksi Midtrans sebelumnya SUDAH LUNAS di Midtrans, namun sinkronisasi database sedang diproses. Pembuatan token baru dibatalkan demi mencegah pembayaran ganda.`,
+        };
+      }
+
+      // ATURAN 2: Status pending -> JANGAN langsung lepas reservasi & JANGAN buat attempt baru
+      if (rawStatus === "pending") {
+        return {
+          ok: false,
+          message:
+            "Transaksi Midtrans sebelumnya masih berstatus PENDING di gateway Midtrans (menunggu pembayaran pelanggan). Demi mencegah pembayaran ganda, attempt baru tidak dapat dibuat selama transaksi lama masih aktif. Silakan tunggu pelanggan menyelesaikan pembayaran atau batalkan transaksi lama terlebih dahulu menggunakan tombol 'Batalkan Reservasi'.",
+        };
+      }
+
+      // ATURAN 3: Status expire atau cancel yang benar-benar dikonfirmasi Midtrans
+      if (rawStatus === "expire" || rawStatus === "cancel") {
+        const nowIso = new Date().toISOString();
+        const nextLifecycle = rawStatus === "expire" ? "expired" : "cancelled";
+
+        await adminClient
+          .from("midtrans_transactions")
+          .update({
+            lifecycle_status: nextLifecycle,
+            midtrans_transaction_status: rawStatus,
+            updated_at: nowIso,
+          })
+          .eq("id", latestTx.id)
+          .in("lifecycle_status", [
+            "initiated",
+            "token_created",
+            "pending",
+            "capture_challenge",
+            "reconciliation_required",
+          ]);
+
+        await adminClient
+          .from("order_allocations")
+          .update({
+            allocation_status: "released",
+            updated_at: nowIso,
+          })
+          .eq("midtrans_transaction_id", latestTx.id)
+          .eq("allocation_status", "reserved");
+
+        await logAudit({
+          action: "midtrans.reservation_released",
+          userId: cashierActor.session.profile.id,
+          username: cashierActor.session.profile.username,
+          entity: "order",
+          entityId: order.id,
+          details: {
+            order_number: order.order_number,
+            midtrans_order_id: latestTx.midtrans_order_id,
+            gross_amount: latestTx.gross_amount,
+            reason: `retry_after_${rawStatus}_confirmed`,
+          },
+        });
+      }
+      // ATURAN 4: Status deny yang dikonfirmasi Midtrans
+      else if (rawStatus === "deny") {
+        const nowIso = new Date().toISOString();
+        await adminClient
+          .from("midtrans_transactions")
+          .update({
+            lifecycle_status: "denied",
+            midtrans_transaction_status: "deny",
+            updated_at: nowIso,
+          })
+          .eq("id", latestTx.id)
+          .in("lifecycle_status", [
+            "initiated",
+            "token_created",
+            "pending",
+            "capture_challenge",
+            "reconciliation_required",
+          ]);
+
+        await adminClient
+          .from("order_allocations")
+          .update({
+            allocation_status: "released",
+            updated_at: nowIso,
+          })
+          .eq("midtrans_transaction_id", latestTx.id)
+          .eq("allocation_status", "reserved");
+
+        await logAudit({
+          action: "midtrans.reservation_released",
+          userId: cashierActor.session.profile.id,
+          username: cashierActor.session.profile.username,
+          entity: "order",
+          entityId: order.id,
+          details: {
+            order_number: order.order_number,
+            midtrans_order_id: latestTx.midtrans_order_id,
+            gross_amount: latestTx.gross_amount,
+            reason: "retry_after_deny_confirmed",
+          },
+        });
+      } else {
+        // Status tidak dikenal atau challenge
+        return {
+          ok: false,
+          message: `Transaksi Midtrans dalam status '${rawStatus}' dan belum dapat dibuatkan token baru. Batalkan reservasi terlebih dahulu jika ingin mencoba metode lain.`,
+        };
+      }
+    } else if (statusCheck.httpStatus === 404) {
+      // HTTP 404: Pelanggan belum pernah memilih payment method di Snap
+      const isExpiredByTime = isMidtransTransactionExpired(latestTx.payment_expires_at);
+      if (!isExpiredByTime) {
+        return {
+          ok: false,
+          message:
+            "Token Snap sebelumnya masih berlaku dan belum kedaluwarsa. Silakan buka ulang Snap atau batalkan reservasi jika ingin membuat transaksi baru.",
+        };
+      }
+
+      // Sudah kedaluwarsa berdasarkan payment_expires_at dan transaksi core 404 -> aman dilepas
+      const nowIso = new Date().toISOString();
+      await adminClient
+        .from("midtrans_transactions")
+        .update({
+          lifecycle_status: "expired",
+          midtrans_transaction_status: "expire",
+          updated_at: nowIso,
+        })
+        .eq("id", latestTx.id)
+        .in("lifecycle_status", ["initiated", "token_created", "pending"]);
+
+      await adminClient
+        .from("order_allocations")
+        .update({
+          allocation_status: "released",
+          updated_at: nowIso,
+        })
+        .eq("midtrans_transaction_id", latestTx.id)
+        .eq("allocation_status", "reserved");
+
+      await logAudit({
+        action: "midtrans.reservation_released",
+        userId: cashierActor.session.profile.id,
+        username: cashierActor.session.profile.username,
+        entity: "order",
+        entityId: order.id,
+        details: {
+          order_number: order.order_number,
+          midtrans_order_id: latestTx.midtrans_order_id,
+          gross_amount: latestTx.gross_amount,
+          reason: "retry_after_snap_404_expired",
+        },
+      });
+    }
+  }
+
+  // 3. Buat transaksi Snap baru dengan attempt nomor berikutnya
+  return createPosMidtransSnapAction(rawInput);
 }
 
 export type OrderPaymentSummaryData = {

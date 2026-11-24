@@ -41,6 +41,49 @@ export function formatReceiptOrderTypeLabel(
   return orderType.toUpperCase();
 }
 
+/**
+ * Menghitung nomor antrean (posisi antrean dapur) yang ditampilkan pada struk:
+ * Posisi Antrean = (jumlah item menu pesanan sebelumnya di dapur KDS yang belum selesai) + 1.
+ * Contoh:
+ * - 0 item di depan -> 1 antrean
+ * - 2 item di depan -> 3 antrean
+ * - 4 item di depan -> 5 antrean
+ * - 7 item di depan -> 8 antrean
+ * Menunjukkan posisi aktual pesanan dalam antrean dapur saat itu,
+ * bukan nomor urutan permanen database (mis. A006).
+ */
+export function formatReceiptQueuePositionLabel(
+  remainingQueueItems?: number | null,
+  explicitPosition?: number | null,
+): string {
+  if (
+    explicitPosition !== undefined &&
+    explicitPosition !== null &&
+    !Number.isNaN(Number(explicitPosition)) &&
+    Number(explicitPosition) > 0
+  ) {
+    return `${Math.round(Number(explicitPosition))} antrean`;
+  }
+  const remaining = Math.max(0, Number(remainingQueueItems) || 0);
+  return `${remaining + 1} antrean`;
+}
+
+/**
+ * Format nomor antrean struk yang mengikuti posisi aktual pesanan pelanggan
+ * dalam antrean dapur (KDS) saat itu.
+ */
+export function formatReceiptQueueNumberLabel(
+  remainingQueueItems?: number | null,
+  explicitPosition?: number | null,
+): string {
+  return formatReceiptQueuePositionLabel(remainingQueueItems, explicitPosition);
+}
+
+export function formatRemainingQueueLabel(remainingItems?: number | null): string {
+  const count = Math.max(0, Number(remainingItems) || 0);
+  return `${count}`;
+}
+
 export function formatSafeReceiptError(rawMessage?: string): string {
   if (!rawMessage) {
     return "Gagal memuat data struk pesanan. Status pembayaran tetap aman; silakan coba muat ulang atau buka dari Daftar Pesanan.";

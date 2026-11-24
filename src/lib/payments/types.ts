@@ -95,6 +95,8 @@ export type ReceiptData = {
     payment_status: string;
     queue_number: string | null;
     queue_date: string | null;
+    remaining_queue_items?: number;
+    queue_position?: number;
     cashier_name: string;
     created_at: string;
     subtotal: number;

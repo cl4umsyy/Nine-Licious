@@ -39,6 +39,7 @@ import type { OrderWithDetails } from "@/lib/orders/types";
 import {
   cancelActiveMidtransReservationAction,
   createPosMidtransSnapAction,
+  retryExpiredMidtransSnapAction,
   getOrderPaymentStatusAction,
   getOrderPaymentSummaryAction,
   processPosManualPaymentAction,
@@ -303,7 +304,11 @@ function PaymentModalContent({
     paymentSummary?.availableForCashAmount ?? effectiveRemainingBalance;
   const activeMidtransTx: ActiveMidtransReservationInfo | null =
     paymentSummary?.activeMidtransTx ?? null;
-  const isAlreadySettledInDb = Boolean(paymentSummary?.isSettled);
+  const isAlreadySettledInDb = Boolean(
+    paymentSummary
+      ? paymentSummary.isSettled && paymentSummary.paymentStatus === "paid"
+      : order.payment_status === "paid" || order.status === "paid",
+  );
 
   // Muat script Midtrans Snap secara dinamis untuk environment sandbox
   useEffect(() => {
@@ -601,6 +606,70 @@ function PaymentModalContent({
     }
   };
 
+  // Membuat Snap Token baru ketika token lama sudah expired (attempt baru)
+  const handleRetryExpiredMidtransSnap = () => {
+    if (isSubmitting || isVerifyingMidtrans || isCancellingMidtrans) return;
+
+    startTransition(async () => {
+      let itemAllocationsPayload:
+        | Array<{
+            order_item_id: string;
+            allocated_quantity: number;
+            allocated_line_subtotal: number;
+            allocated_discount_share: number;
+            allocated_service_share: number;
+            allocated_tax_share: number;
+            allocated_final_amount: number;
+          }>
+        | undefined = undefined;
+
+      let effectiveGross = payAmount;
+
+      if (splitMode === "by_item" && itemAllocationCalculation) {
+        effectiveGross = itemAllocationCalculation.grossTotal;
+        itemAllocationsPayload = itemAllocationCalculation.items.map((it) => ({
+          order_item_id: it.orderItemId,
+          allocated_quantity: it.allocatedQuantity,
+          allocated_line_subtotal: it.allocatedLineSubtotal,
+          allocated_discount_share: it.allocatedDiscountShare,
+          allocated_service_share: it.allocatedServiceShare,
+          allocated_tax_share: it.allocatedTaxShare,
+          allocated_final_amount: it.allocatedFinalAmount,
+        }));
+      }
+
+      const freshIdempotencyKey = `pos-midtrans-${order.id}-${Date.now()}`;
+      onRefreshIdempotencyKey();
+
+      const result = await retryExpiredMidtransSnapAction({
+        orderId: order.id,
+        grossAmount: effectiveGross,
+        idempotencyKey: freshIdempotencyKey,
+        isSplitBill: splitMode !== "full",
+        splitBillType:
+          splitMode === "by_item"
+            ? "by_item"
+            : splitMode === "custom_amount"
+              ? "custom_amount"
+              : null,
+        itemAllocations: itemAllocationsPayload ?? null,
+      });
+
+      if (!result.ok || !result.data?.snapToken) {
+        toast.error(result.message || "Gagal membuat attempt Midtrans Snap baru.");
+        setMidtransWaiting(false);
+        void refreshPaymentSummary();
+        return;
+      }
+
+      const { snapToken } = result.data;
+      setActiveSnapToken(snapToken);
+      await refreshPaymentSummary();
+      toast.success("Token Midtrans Snap baru berhasil dibuat.");
+      triggerSnapPopup(snapToken);
+    });
+  };
+
   // Verifikasi status pembayaran tepercaya dari server dengan rekonsiliasi aktif (GET Status API)
   const checkServerPaymentStatus = async () => {
     if (isVerifyingMidtrans || isCancellingMidtrans) return;
@@ -626,19 +695,31 @@ function PaymentModalContent({
 
         setActiveSnapToken(res.data.activeSnapToken ?? null);
 
-        if (res.data.isSettled) {
+        // SYARAT MUTLAK: onPaymentSuccess hanya dipanggil jika DATABASE sudah benar-benar berstatus "paid"
+        if (res.data.isSettled && res.data.paymentStatus === "paid") {
           toast.success(
             `Pesanan #${res.data.orderNumber} LUNAS terverifikasi di Midtrans!`,
           );
           setMidtransWaiting(false);
           onPaymentSuccess(order.id, true);
+        } else if (res.data.isSettled && res.data.paymentStatus !== "paid") {
+          // Gateway sudah settlement, namun status database belum paid
+          toast.warning(
+            res.data.reconciliationMessage ||
+              "Pembayaran telah berhasil di gateway Midtrans, namun sinkronisasi database sedang diproses. Struk belum dapat dicetak.",
+          );
+          await refreshPaymentSummary();
         } else if (res.data.reservationReleased) {
           onRefreshIdempotencyKey();
           toast.info(
             res.data.reconciliationMessage ||
-              "Reservasi Midtrans telah dilepas. Silakan bayar dengan Tunai atau buka Midtrans Snap baru.",
+              "Reservasi Midtrans telah dilepas. Silakan bayar dengan Tunai atau buat transaksi Midtrans Snap baru.",
           );
-        } else if (res.data.paidTotal > (order.paid_total || 0)) {
+          await refreshPaymentSummary();
+        } else if (
+          res.data.paidTotal > (order.paid_total || 0) &&
+          res.data.paymentStatus === "paid"
+        ) {
           toast.success(
             `Pembayaran parsial terverifikasi. Sisa tagihan: ${formatRupiah(res.data.remainingBalance)}`,
           );
@@ -676,10 +757,13 @@ function PaymentModalContent({
       if (res.data?.wasAlreadySettled) {
         toast.info(res.message);
         if (res.data.isSettled) {
-          onPaymentSuccess(order.id, true);
-        } else {
-          await refreshPaymentSummary();
+          const refreshed = await getOrderPaymentSummaryAction(order.id);
+          if (refreshed.ok && refreshed.data?.paymentStatus === "paid") {
+            onPaymentSuccess(order.id, true);
+            return;
+          }
         }
+        await refreshPaymentSummary();
         return;
       }
 
@@ -747,7 +831,11 @@ function PaymentModalContent({
               <Button
                 type="button"
                 size="sm"
-                onClick={() => onPaymentSuccess(order.id, true)}
+                onClick={() => {
+                  if (isAlreadySettledInDb) {
+                    onPaymentSuccess(order.id, true);
+                  }
+                }}
                 className="h-9 px-4 text-xs font-bold gap-2 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700"
               >
                 <Receipt className="size-3.5 shrink-0" />
@@ -1240,31 +1328,54 @@ function PaymentModalContent({
                     </Badge>
                   </div>
                   <p className="text-xs text-muted-foreground leading-relaxed">
-                    Verifikasi status ke Midtrans atau batalkan reservasi terlebih dahulu agar
-                    Anda bisa membuka transaksi Midtrans Snap baru atau membayar Tunai.
+                    {activeMidtransTx.isExpired
+                      ? "Masa berlaku token Snap sebelumnya sudah habis. Jika pelanggan belum membayar, Anda dapat membuat Snap Token baru atau membatalkan reservasi untuk beralih ke Tunai."
+                      : "Verifikasi status ke Midtrans atau batalkan reservasi terlebih dahulu agar Anda bisa membuka transaksi Midtrans Snap baru atau membayar Tunai."}
                   </p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                     <Button
                       type="button"
                       size="default"
                       variant="default"
                       disabled={isVerifyingMidtrans || isCancellingMidtrans || isSubmitting}
+                      onClick={handleRetryExpiredMidtransSnap}
+                      className="h-10 px-3 text-xs font-bold gap-2 bg-primary text-primary-foreground shadow-xs rounded-xl"
+                    >
+                      {isSubmitting ? (
+                        <>
+                          <Loader2 className="size-3.5 animate-spin shrink-0" />
+                          <span>Membuat Token...</span>
+                        </>
+                      ) : (
+                        <>
+                          <QrCode className="size-3.5 shrink-0" />
+                          <span>Buat Token Baru &amp; Buka Snap</span>
+                        </>
+                      )}
+                    </Button>
+
+                    <Button
+                      type="button"
+                      size="default"
+                      variant="outline"
+                      disabled={isVerifyingMidtrans || isCancellingMidtrans || isSubmitting}
                       onClick={checkServerPaymentStatus}
-                      className="h-10 px-4 text-xs font-bold gap-2 rounded-xl"
+                      className="h-10 px-3 text-xs font-semibold gap-2 border-border/80 hover:bg-muted rounded-xl"
                     >
                       <RefreshCw className={`size-3.5 shrink-0 ${isVerifyingMidtrans ? "animate-spin" : ""}`} />
-                      <span>{isVerifyingMidtrans ? "Memeriksa Status..." : "Cek Status Midtrans"}</span>
+                      <span>{isVerifyingMidtrans ? "Memeriksa..." : "Cek Status Midtrans"}</span>
                     </Button>
+
                     <Button
                       type="button"
                       size="default"
                       variant="destructive"
                       disabled={isCancellingMidtrans || isVerifyingMidtrans || isSubmitting}
                       onClick={handleCancelMidtransReservation}
-                      className="h-10 px-4 text-xs font-semibold gap-2 rounded-xl"
+                      className="h-10 px-3 text-xs font-semibold gap-2 rounded-xl"
                     >
                       <XCircle className="size-3.5 shrink-0" />
-                      <span>{isCancellingMidtrans ? "Membatalkan..." : "Batalkan & Lepas Reservasi"}</span>
+                      <span>{isCancellingMidtrans ? "Membatalkan..." : "Batalkan Reservasi"}</span>
                     </Button>
                   </div>
                 </div>
@@ -1314,7 +1425,11 @@ function PaymentModalContent({
           <Button
             type="button"
             size="default"
-            onClick={() => onPaymentSuccess(order.id, true)}
+            onClick={() => {
+              if (isAlreadySettledInDb) {
+                onPaymentSuccess(order.id, true);
+              }
+            }}
             className="h-11 px-6 text-xs sm:text-sm font-bold bg-emerald-600 text-white shadow-sm rounded-xl gap-2 hover:bg-emerald-700 w-full sm:w-auto"
           >
             <Receipt className="size-4 shrink-0" />
@@ -1361,12 +1476,32 @@ function PaymentModalContent({
               <Button
                 type="button"
                 size="default"
+                variant="outline"
                 disabled={isSubmitting || isVerifyingMidtrans || isCancellingMidtrans}
                 onClick={checkServerPaymentStatus}
-                className="h-11 px-5 sm:px-6 text-xs sm:text-sm font-bold bg-primary text-primary-foreground shadow-sm rounded-xl gap-2 hover:bg-primary/90"
+                className="h-11 px-4 text-xs sm:text-sm font-semibold rounded-xl gap-2 border-border/80 hover:bg-muted"
               >
                 <RefreshCw className={`size-4 shrink-0 ${isVerifyingMidtrans ? "animate-spin" : ""}`} />
                 <span>{isVerifyingMidtrans ? "Memeriksa..." : "Cek Status Midtrans"}</span>
+              </Button>
+              <Button
+                type="button"
+                size="default"
+                disabled={isSubmitting || isVerifyingMidtrans || isCancellingMidtrans || midtransWaiting}
+                onClick={handleRetryExpiredMidtransSnap}
+                className="h-11 px-5 sm:px-6 text-xs sm:text-sm font-bold bg-primary text-primary-foreground shadow-sm rounded-xl gap-2 hover:bg-primary/90"
+              >
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin shrink-0" />
+                    <span>Membuat Token...</span>
+                  </>
+                ) : (
+                  <>
+                    <QrCode className="size-4 shrink-0" />
+                    <span>Buka Midtrans Snap Baru</span>
+                  </>
+                )}
               </Button>
             </div>
           ) : (

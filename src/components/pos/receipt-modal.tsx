@@ -24,6 +24,8 @@ import { getOrderReceiptDataAction } from "@/lib/payments/actions";
 import {
   formatReceiptOrderTypeLabel,
   formatReceiptPaymentMethodLabel,
+  formatReceiptQueuePositionLabel,
+  formatRemainingQueueLabel,
   normalizeReceiptWidth,
   type ReceiptPaperWidth,
 } from "@/lib/payments/receipt";
@@ -302,10 +304,23 @@ function ReceiptModalContent({
                 </div>
               ) : null}
               {data.order.queue_number ? (
-                <div className="flex justify-between gap-2 font-bold text-primary print:text-black">
-                  <span>No. Antrean:</span>
-                  <span className="text-xs">{data.order.queue_number}</span>
-                </div>
+                <>
+                  <div className="flex justify-between gap-2 font-bold text-primary print:text-black">
+                    <span>Nomor Antrean:</span>
+                    <span className="text-xs">
+                      {formatReceiptQueuePositionLabel(
+                        data.order.remaining_queue_items,
+                        data.order.queue_position,
+                      )}
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-2 text-neutral-700 print:text-black">
+                    <span>Sisa Antrean:</span>
+                    <span className="text-right font-medium">
+                      {formatRemainingQueueLabel(data.order.remaining_queue_items)}
+                    </span>
+                  </div>
+                </>
               ) : null}
               <div className="flex justify-between gap-2">
                 <span>Kasir:</span>
