@@ -18,6 +18,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { cancelPosOrderAction } from "@/lib/orders/actions";
 import { DEFAULT_CANCEL_REASONS } from "@/lib/orders/constants";
+import { canCancelOrder } from "@/lib/orders/status-rules";
 import type { OrderWithDetails } from "@/lib/orders/types";
 
 export type OrderCancelModalProps = {
@@ -41,14 +42,22 @@ export function OrderCancelModal({
 
   if (!order) return null;
 
+  const isOrderCancellable = canCancelOrder(order);
+
   const finalReason =
     selectedReason === "Alasan lainnya"
       ? customReason.trim()
       : selectedReason;
 
-  const isValid = finalReason.length >= 3;
+  const isValid = isOrderCancellable && finalReason.length >= 3;
 
   const handleCancelOrder = () => {
+    if (!isOrderCancellable) {
+      toast.error(
+        `Pesanan #${order.order_number} berstatus ${order.status} dan tidak dapat dibatalkan.`,
+      );
+      return;
+    }
     if (!isValid || isPending) return;
 
     startTransition(async () => {
@@ -82,12 +91,22 @@ export function OrderCancelModal({
         </DialogHeader>
 
         <div className="space-y-4 py-2 text-xs">
-          <Alert variant="destructive" className="py-2 px-3">
-            <AlertTriangle className="size-4" />
-            <AlertDescription className="text-xs">
-              Tindakan ini permanen. Jika meja menjadi kosong, status meja akan dikembalikan menjadi <strong>Kosong</strong>.
-            </AlertDescription>
-          </Alert>
+          {!isOrderCancellable ? (
+            <Alert variant="destructive" className="py-2 px-3">
+              <AlertTriangle className="size-4" />
+              <AlertDescription className="text-xs">
+                Pesanan <strong>#{order.order_number}</strong> berstatus{" "}
+                <strong>{order.status}</strong> ({order.payment_status}) dan tidak memenuhi syarat pembatalan pesanan belum dibayar.
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <Alert variant="destructive" className="py-2 px-3">
+              <AlertTriangle className="size-4" />
+              <AlertDescription className="text-xs">
+                Tindakan ini permanen. Seluruh reservasi gateway yang terkonfirmasi berakhir &amp; stok bahan akan dilepas. Jika meja menjadi kosong, status meja dikembalikan menjadi <strong>Kosong</strong>.
+              </AlertDescription>
+            </Alert>
+          )}
 
           <div className="space-y-2">
             <Label className="text-xs font-semibold">
@@ -96,6 +115,7 @@ export function OrderCancelModal({
             <RadioGroup
               value={selectedReason}
               onValueChange={setSelectedReason}
+              disabled={!isOrderCancellable || isPending}
               className="space-y-1.5"
             >
               {DEFAULT_CANCEL_REASONS.map((reason) => (

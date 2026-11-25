@@ -544,10 +544,18 @@ export function PosContainer({
         isOpen={paymentOrder !== null}
         activeShift={activeShift}
         onClose={() => {
-          if (paymentOrder) {
-            setConfirmedOrder(paymentOrder);
-          }
           setPaymentOrder(null);
+          router.refresh();
+        }}
+        onOrderCancelled={() => {
+          setPaymentOrder(null);
+          setConfirmedOrder(null);
+          setActiveTableOrder(null);
+          router.refresh();
+        }}
+        onOpenCancelOrder={(order) => {
+          setPaymentOrder(null);
+          setOrderToCancel(order);
         }}
         onPaymentSuccess={(orderId, isSettled) => {
           const settledTableId = paymentOrder?.table_id;

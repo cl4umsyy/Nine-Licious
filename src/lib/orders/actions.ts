@@ -25,7 +25,9 @@ import {
   firstZodError,
   tableIdSchema,
 } from "@/lib/orders/validation";
+import { verifyAndReleaseGatewayBeforeOrderCancel } from "@/lib/midtrans/reconcile";
 import { validateOrderInventoryAvailability } from "@/lib/orders/inventory-validation";
+import { canCancelOrder } from "@/lib/orders/status-rules";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import type {
@@ -72,7 +74,12 @@ async function getActionContext(): Promise<
 function revalidatePosPaths(): void {
   revalidatePath("/pos");
   revalidatePath("/pos/floor");
+  revalidatePath("/pos/orders");
+  revalidatePath("/kitchen");
+  revalidatePath("/queue");
   revalidatePath("/admin/tables");
+  revalidatePath("/admin/transactions");
+  revalidatePath("/admin/inventory");
 }
 
 /**
@@ -1023,6 +1030,10 @@ export async function appendOrderItemsAction(
 
 /**
  * Membatalkan pesanan yang belum dibayar dengan alasan wajib.
+ * Terlebih dahulu memverifikasi seluruh percobaan Midtrans terhadap Core API
+ * (settlement -> blokir batal & rekonsiliasi; pending -> batal ke Midtrans dulu;
+ * expire/cancel/deny/404 -> tutup transaksi gateway & lepas alokasi; timeout -> fail-closed),
+ * kemudian memanggil `cancel_pos_order` dan memastikan reservasi stok terlepas idempoten.
  */
 export async function cancelPosOrderAction(
   orderId: string,
@@ -1042,6 +1053,55 @@ export async function cancelPosOrderAction(
     };
   }
 
+  const { data: orderRow, error: orderFetchError } = await context.supabase
+    .from("orders")
+    .select("id, order_number, status, payment_status, paid_total")
+    .eq("id", parsed.data.orderId)
+    .maybeSingle();
+
+  if (orderFetchError || !orderRow) {
+    return {
+      ok: false,
+      message: "Pesanan tidak ditemukan.",
+    };
+  }
+
+  if (orderRow.status === "cancelled") {
+    const adminClient = createSupabaseAdminClient();
+    const reservationClient = adminClient ?? context.supabase;
+    await reservationClient.rpc("release_order_stock_reservations_internal", {
+      p_order_id: parsed.data.orderId,
+    });
+    revalidatePosPaths();
+    return {
+      ok: true,
+      message: `Pesanan #${orderRow.order_number} sudah dibatalkan sebelumnya.`,
+    };
+  }
+
+  if (!canCancelOrder(orderRow)) {
+    return {
+      ok: false,
+      message: `Pesanan #${orderRow.order_number} berstatus ${orderRow.status} (${orderRow.payment_status}) dan tidak dapat dibatalkan.`,
+    };
+  }
+
+  const gatewayCheck = await verifyAndReleaseGatewayBeforeOrderCancel({
+    orderId: parsed.data.orderId,
+    actorUserId: context.actor.user.id,
+    actorUsername: context.actor.profile.username,
+  });
+
+  if (!gatewayCheck.ok) {
+    if (gatewayCheck.blockedBySettlement) {
+      revalidatePosPaths();
+    }
+    return {
+      ok: false,
+      message: gatewayCheck.message,
+    };
+  }
+
   // Panggil fungsi tersimpan cancel_pos_order resmi (p_order_id, p_cancel_reason)
   const { data: rpcData, error: rpcError } = await context.supabase.rpc(
     "cancel_pos_order",
@@ -1058,6 +1118,20 @@ export async function cancelPosOrderAction(
     };
   }
 
+  // Safeguard idempoten: pastikan seluruh reservasi stok order sudah dilepas
+  const adminClient = createSupabaseAdminClient();
+  const reservationClient = adminClient ?? context.supabase;
+  const { error: stockReleaseError } = await reservationClient.rpc(
+    "release_order_stock_reservations_internal",
+    { p_order_id: parsed.data.orderId },
+  );
+  if (stockReleaseError) {
+    console.error(
+      "[cancelPosOrderAction] Non-fatal stock reservation release check error:",
+      stockReleaseError.message,
+    );
+  }
+
   // Sukses via RPC
   await logAudit({
     action: "order.cancel",
@@ -1066,7 +1140,9 @@ export async function cancelPosOrderAction(
     entity: "order",
     entityId: parsed.data.orderId,
     details: {
+      order_number: orderRow.order_number,
       reason: parsed.data.reason,
+      released_gateway_attempts: gatewayCheck.releasedGatewayCount,
       rpc_result: rpcData,
     },
   });
@@ -1074,7 +1150,7 @@ export async function cancelPosOrderAction(
   revalidatePosPaths();
   return {
     ok: true,
-    message: "Pesanan berhasil dibatalkan.",
+    message: `Pesanan #${orderRow.order_number} berhasil dibatalkan.`,
   };
 }
 

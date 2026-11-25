@@ -17,7 +17,10 @@ import {
   processRefundSchema,
 } from "@/lib/payments/validation";
 import { createSnapPayment } from "@/lib/midtrans/service";
-import { reconcileActiveMidtransPayment } from "@/lib/midtrans/reconcile";
+import {
+  reconcileActiveMidtransPayment,
+  verifyAndReleaseGatewayBeforeOrderCancel,
+} from "@/lib/midtrans/reconcile";
 import {
   cancelMidtransTransaction,
   getMidtransStatus,
@@ -39,6 +42,12 @@ import type {
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { isMissingServingSchemaError } from "@/lib/orders/serving";
+import {
+  canCancelOrder,
+  canPayOrder,
+  canShowReceiptForOrder,
+  isOrderCancelledOrRefunded,
+} from "@/lib/orders/status-rules";
 import {
   aggregateKdsPriorItems,
   formatSafeReceiptError,
@@ -144,17 +153,12 @@ export async function processPosManualPaymentAction(
     };
   }
 
-  if (order.status === "cancelled") {
+  if (!canPayOrder(order)) {
     return {
       ok: false,
-      message: `Pesanan ${order.order_number} sudah dibatalkan dan tidak dapat menerima pembayaran.`,
-    };
-  }
-
-  if (order.status === "paid" || order.payment_status === "paid") {
-    return {
-      ok: false,
-      message: `Pesanan ${order.order_number} sudah lunas sebelumnya.`,
+      message: isOrderCancelledOrRefunded(order)
+        ? `Pesanan ${order.order_number} berstatus ${order.status} dan tidak dapat menerima pembayaran.`
+        : `Pesanan ${order.order_number} sudah lunas atau selesai sebelumnya.`,
     };
   }
 
@@ -292,6 +296,38 @@ export async function processOrderRefundAction(
     return { ok: false, message: "Klien database tidak tersedia." };
   }
 
+  // Pre-validasi order: pesanan dibatalkan/belum dibayar tidak boleh direfund
+  const { data: refundOrderCheck } = await supabase
+    .from("orders")
+    .select("id, order_number, status, payment_status, paid_total")
+    .eq("id", input.orderId)
+    .maybeSingle();
+
+  if (!refundOrderCheck) {
+    return { ok: false, message: "Pesanan tidak ditemukan di database." };
+  }
+
+  if (refundOrderCheck.status === "cancelled") {
+    return {
+      ok: false,
+      message: `Pesanan #${refundOrderCheck.order_number} berstatus dibatalkan dan tidak dapat direfund.`,
+    };
+  }
+
+  if (refundOrderCheck.status === "refunded") {
+    return {
+      ok: false,
+      message: `Pesanan #${refundOrderCheck.order_number} sudah direfund penuh sebelumnya.`,
+    };
+  }
+
+  if ((Number(refundOrderCheck.paid_total) || 0) <= 0) {
+    return {
+      ok: false,
+      message: `Pesanan #${refundOrderCheck.order_number} belum memiliki pembayaran yang berhasil tercatat.`,
+    };
+  }
+
   // 4. Eksekusi RPC Atomik process_order_refund_atomic
   const { data: rpcResult, error: rpcErr } = await supabase.rpc(
     "process_order_refund_atomic",
@@ -427,6 +463,7 @@ export async function calculateRemainingQueueItems(
   targetOrder: {
     id: string;
     created_at: string;
+    status?: string | null;
     queue_date?: string | null;
     queue_number?: string | null;
     order_number?: string | null;
@@ -440,10 +477,10 @@ export async function calculateRemainingQueueItems(
 
   try {
     let currentTarget = targetOrder;
-    if (!currentTarget.kds_status || currentTarget.served_at === undefined) {
+    if (!currentTarget.kds_status || currentTarget.served_at === undefined || currentTarget.status === undefined) {
       const { data: freshTarget } = await supabase
         .from("orders")
-        .select("id, order_number, queue_number, queue_date, kds_status, served_at, created_at")
+        .select("id, status, order_number, queue_number, queue_date, kds_status, served_at, created_at")
         .eq("id", targetOrder.id)
         .maybeSingle();
 
@@ -455,7 +492,12 @@ export async function calculateRemainingQueueItems(
       }
     }
 
-    if (currentTarget.served_at || currentTarget.kds_status === "ready") {
+    if (
+      currentTarget.status === "cancelled" ||
+      currentTarget.status === "refunded" ||
+      currentTarget.served_at ||
+      currentTarget.kds_status === "ready"
+    ) {
       return 0;
     }
 
@@ -527,8 +569,8 @@ async function buildOrderReceiptDataFallback(
   }
 
   const paidTotal = Number(order.paid_total) || 0;
-  // Sesuai aturan: Unpaid, Pending, Expired, atau Pembatalan tanpa pembayaran tidak menghasilkan struk
-  if (paidTotal <= 0 || order.payment_status === "unpaid") {
+  // Sesuai aturan: Unpaid, Pending, Expired, atau Pesanan Dibatalkan tidak menghasilkan struk
+  if (!canShowReceiptForOrder(order)) {
     return null;
   }
 
@@ -787,22 +829,16 @@ export async function getOrderReceiptDataAction(
     return { ok: false, message: "Pesanan tidak ditemukan di database." };
   }
 
-  const paidTotal = Number(orderCheck.paid_total) || 0;
-
-  // Aturan F2 & F5: Unpaid, Pending, Expired, atau Pesanan Dibatalkan tanpa pembayaran TIDAK menghasilkan struk
-  if (paidTotal <= 0 || orderCheck.payment_status === "unpaid") {
+  // Aturan F2 & F5: Unpaid, Pending, Expired, atau Pesanan Dibatalkan TIDAK menghasilkan struk
+  if (!canShowReceiptForOrder(orderCheck)) {
+    const isCancelled = orderCheck.status === "cancelled";
     return {
       ok: false,
-      message:
-        "Pesanan belum memiliki riwayat pembayaran yang terverifikasi (Unpaid). Struk pembayaran hanya dapat dicetak setelah ada pembayaran yang berhasil tercatat.",
-    };
-  }
-
-  if (orderCheck.status === "cancelled" && paidTotal <= 0) {
-    return {
-      ok: false,
-      message:
-        "Pesanan telah dibatalkan tanpa pembayaran. Struk pembayaran tidak dapat diterbitkan.",
+      errorCode: isCancelled ? "ORDER_CANCELLED" : undefined,
+      meta: { orderStatus: orderCheck.status },
+      message: isCancelled
+        ? `Pesanan #${orderCheck.order_number} telah DIBATALKAN. Struk pembayaran lunas tidak dapat diterbitkan.`
+        : "Pesanan belum memiliki riwayat pembayaran yang terverifikasi (Unpaid). Struk pembayaran hanya dapat dicetak setelah ada pembayaran yang berhasil tercatat.",
     };
   }
 
@@ -816,11 +852,13 @@ export async function getOrderReceiptDataAction(
   if (!rpcErr && rpcResult) {
     const rawData = rpcResult as unknown as ReceiptData;
     // Proteksi ganda pada hasil RPC
-    if (Number(rawData.order.paid_total) <= 0 || rawData.order.payment_status === "unpaid") {
+    if (!canShowReceiptForOrder(rawData.order)) {
       return {
         ok: false,
         message:
-          "Pesanan belum memiliki riwayat pembayaran yang terverifikasi. Struk pembayaran tidak dapat diterbitkan.",
+          rawData.order.status === "cancelled"
+            ? "Pesanan telah dibatalkan. Struk pembayaran tidak dapat diterbitkan."
+            : "Pesanan belum memiliki riwayat pembayaran yang terverifikasi. Struk pembayaran tidak dapat diterbitkan.",
       };
     }
     if (rawData.order.remaining_balance === undefined) {
@@ -950,17 +988,12 @@ export async function createPosMidtransSnapAction(
     };
   }
 
-  if (order.status === "cancelled") {
+  if (!canPayOrder(order)) {
     return {
       ok: false,
-      message: `Pesanan ${order.order_number} sudah dibatalkan dan tidak dapat menerima pembayaran.`,
-    };
-  }
-
-  if (order.status === "paid" || order.payment_status === "paid") {
-    return {
-      ok: false,
-      message: `Pesanan ${order.order_number} sudah lunas sebelumnya.`,
+      message: isOrderCancelledOrRefunded(order)
+        ? `Pesanan ${order.order_number} berstatus ${order.status} dan tidak dapat menerima pembayaran.`
+        : `Pesanan ${order.order_number} sudah lunas atau selesai sebelumnya.`,
     };
   }
 
@@ -1087,31 +1120,91 @@ export async function retryExpiredMidtransSnapAction(
     return { ok: false, message: "Pesanan tidak ditemukan di database." };
   }
 
-  if (order.status === "paid" || order.payment_status === "paid") {
+  if (!canPayOrder(order)) {
     return {
       ok: false,
-      message: `Pesanan #${order.order_number} sudah berstatus lunas. Tidak dapat membuat token baru.`,
+      message: isOrderCancelledOrRefunded(order)
+        ? `Pesanan #${order.order_number} berstatus ${order.status} dan tidak dapat membuat token pembayaran baru.`
+        : `Pesanan #${order.order_number} sudah berstatus lunas atau selesai. Tidak dapat membuat token baru.`,
     };
   }
 
-  // Periksa attempt Midtrans aktif/terakhir
-  const { data: latestTx } = await adminClient
+  // Periksa SELURUH attempt Midtrans yang settled atau masih non-terminal (global multi-attempt guard)
+  const { data: candidateTxs } = await adminClient
     .from("midtrans_transactions")
-    .select("id, midtrans_order_id, gross_amount, lifecycle_status, payment_expires_at, snap_token")
+    .select(
+      "id, midtrans_order_id, gross_amount, lifecycle_status, midtrans_transaction_status, payment_expires_at, snap_token",
+    )
     .eq("order_id", order.id)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .in("lifecycle_status", [
+      "settled",
+      ...ACTIVE_RESERVATION_LIFECYCLE_STATUSES,
+    ])
+    .order("created_at", { ascending: false });
 
-  if (latestTx && latestTx.midtrans_order_id) {
-    // 1. Verifikasi transaksi lama di Midtrans Core API
-    const statusCheck = await getMidtransStatus(latestTx.midtrans_order_id);
+  const txList = (candidateTxs ?? []) as Array<{
+    id: string;
+    midtrans_order_id: string;
+    gross_amount: number;
+    lifecycle_status: MidtransLifecycleStatus;
+    midtrans_transaction_status: string | null;
+    payment_expires_at: string;
+    snap_token: string | null;
+  }>;
+
+  if (txList.some((tx) => tx.lifecycle_status === "settled")) {
+    await reconcileActiveMidtransPayment({ orderId: order.id });
+    const { data: refreshedOrder } = await adminClient
+      .from("orders")
+      .select("id, order_number, status, payment_status, grand_total, paid_total")
+      .eq("id", order.id)
+      .maybeSingle();
+
+    const isPaidInDb =
+      refreshedOrder &&
+      (refreshedOrder.payment_status === "paid" || refreshedOrder.status === "paid") &&
+      Number(refreshedOrder.paid_total) >= Number(refreshedOrder.grand_total);
+
+    return {
+      ok: false,
+      message: isPaidInDb
+        ? "Transaksi Midtrans sebelumnya SUDAH LUNAS terverifikasi di Midtrans dan database. Silakan muat ulang atau cetak struk."
+        : "Transaksi Midtrans sebelumnya SUDAH LUNAS di Midtrans, namun sinkronisasi database sedang diproses. Pembuatan token baru dibatalkan demi mencegah pembayaran ganda.",
+    };
+  }
+
+  const quarantinedTx = txList.find(
+    (tx) =>
+      tx.lifecycle_status === "capture_challenge" ||
+      (tx.lifecycle_status === "reconciliation_required" &&
+        tx.midtrans_transaction_status !== null),
+  );
+  if (quarantinedTx) {
+    return {
+      ok: false,
+      message: `Transaksi Midtrans (${quarantinedTx.midtrans_order_id}: ${quarantinedTx.lifecycle_status}) memerlukan tinjauan rekonsiliasi admin terlebih dahulu. Pembuatan token baru ditolak.`,
+    };
+  }
+
+  type ReleasableAttempt = {
+    tx: (typeof txList)[number];
+    nextLifecycle: "expired" | "cancelled" | "denied";
+    rawStatus: "expire" | "cancel" | "deny";
+    auditReason: string;
+  };
+  const verifiedReleasable: ReleasableAttempt[] = [];
+
+  // Phase 1: Verifikasi seluruh attempt aktif ke Midtrans Core API sebelum melepas/membuat token baru
+  for (const tx of txList) {
+    if (!tx.midtrans_order_id) continue;
+
+    const statusCheck = await getMidtransStatus(tx.midtrans_order_id);
 
     // ATURAN 5: Status tidak diketahui, timeout, atau gangguan API -> FAIL-CLOSED
     if (!statusCheck.ok && statusCheck.httpStatus !== 404) {
       return {
         ok: false,
-        message: `Tidak dapat memverifikasi status transaksi lama ke Midtrans: ${statusCheck.error || "Gangguan koneksi API"}. Pembuatan token baru ditolak demi mencegah pembayaran ganda (fail-closed).`,
+        message: `Tidak dapat memverifikasi status transaksi lama (${tx.midtrans_order_id}) ke Midtrans: ${statusCheck.error || "Gangguan koneksi API"}. Pembuatan token baru ditolak demi mencegah pembayaran ganda (fail-closed).`,
       };
     }
 
@@ -1121,7 +1214,6 @@ export async function retryExpiredMidtransSnapAction(
 
       // ATURAN 1: Status settlement / capture+accept
       if (isMidtransPaidStatus(rawStatus, fraudStatus)) {
-        // Transaksi lama sudah settlement! Rekonsiliasi & cegah token baru
         await reconcileActiveMidtransPayment({ orderId: order.id });
 
         const { data: refreshedOrder } = await adminClient
@@ -1138,8 +1230,8 @@ export async function retryExpiredMidtransSnapAction(
         return {
           ok: false,
           message: isPaidInDb
-            ? `Transaksi Midtrans sebelumnya SUDAH LUNAS terverifikasi di Midtrans dan database. Silakan muat ulang atau cetak struk.`
-            : `Transaksi Midtrans sebelumnya SUDAH LUNAS di Midtrans, namun sinkronisasi database sedang diproses. Pembuatan token baru dibatalkan demi mencegah pembayaran ganda.`,
+            ? "Transaksi Midtrans sebelumnya SUDAH LUNAS terverifikasi di Midtrans dan database. Silakan muat ulang atau cetak struk."
+            : "Transaksi Midtrans sebelumnya SUDAH LUNAS di Midtrans, namun sinkronisasi database sedang diproses. Pembuatan token baru dibatalkan demi mencegah pembayaran ganda.",
         };
       }
 
@@ -1148,148 +1240,96 @@ export async function retryExpiredMidtransSnapAction(
         return {
           ok: false,
           message:
-            "Transaksi Midtrans sebelumnya masih berstatus PENDING di gateway Midtrans (menunggu pembayaran pelanggan). Demi mencegah pembayaran ganda, attempt baru tidak dapat dibuat selama transaksi lama masih aktif. Silakan tunggu pelanggan menyelesaikan pembayaran atau batalkan transaksi lama terlebih dahulu menggunakan tombol 'Batalkan Reservasi'.",
+            `Transaksi Midtrans (${tx.midtrans_order_id}) masih berstatus PENDING di gateway Midtrans (menunggu pembayaran pelanggan). Demi mencegah pembayaran ganda, attempt baru tidak dapat dibuat selama transaksi lama masih aktif. Silakan tunggu pelanggan menyelesaikan pembayaran atau batalkan transaksi lama terlebih dahulu menggunakan tombol 'Batalkan Reservasi'.`,
         };
       }
 
       // ATURAN 3: Status expire atau cancel yang benar-benar dikonfirmasi Midtrans
       if (rawStatus === "expire" || rawStatus === "cancel") {
-        const nowIso = new Date().toISOString();
-        const nextLifecycle = rawStatus === "expire" ? "expired" : "cancelled";
-
-        await adminClient
-          .from("midtrans_transactions")
-          .update({
-            lifecycle_status: nextLifecycle,
-            midtrans_transaction_status: rawStatus,
-            updated_at: nowIso,
-          })
-          .eq("id", latestTx.id)
-          .in("lifecycle_status", [
-            "initiated",
-            "token_created",
-            "pending",
-            "capture_challenge",
-            "reconciliation_required",
-          ]);
-
-        await adminClient
-          .from("order_allocations")
-          .update({
-            allocation_status: "released",
-            updated_at: nowIso,
-          })
-          .eq("midtrans_transaction_id", latestTx.id)
-          .eq("allocation_status", "reserved");
-
-        await logAudit({
-          action: "midtrans.reservation_released",
-          userId: cashierActor.session.profile.id,
-          username: cashierActor.session.profile.username,
-          entity: "order",
-          entityId: order.id,
-          details: {
-            order_number: order.order_number,
-            midtrans_order_id: latestTx.midtrans_order_id,
-            gross_amount: latestTx.gross_amount,
-            reason: `retry_after_${rawStatus}_confirmed`,
-          },
+        verifiedReleasable.push({
+          tx,
+          nextLifecycle: rawStatus === "expire" ? "expired" : "cancelled",
+          rawStatus,
+          auditReason: `retry_after_${rawStatus}_confirmed`,
         });
+        continue;
       }
+
       // ATURAN 4: Status deny yang dikonfirmasi Midtrans
-      else if (rawStatus === "deny") {
-        const nowIso = new Date().toISOString();
-        await adminClient
-          .from("midtrans_transactions")
-          .update({
-            lifecycle_status: "denied",
-            midtrans_transaction_status: "deny",
-            updated_at: nowIso,
-          })
-          .eq("id", latestTx.id)
-          .in("lifecycle_status", [
-            "initiated",
-            "token_created",
-            "pending",
-            "capture_challenge",
-            "reconciliation_required",
-          ]);
-
-        await adminClient
-          .from("order_allocations")
-          .update({
-            allocation_status: "released",
-            updated_at: nowIso,
-          })
-          .eq("midtrans_transaction_id", latestTx.id)
-          .eq("allocation_status", "reserved");
-
-        await logAudit({
-          action: "midtrans.reservation_released",
-          userId: cashierActor.session.profile.id,
-          username: cashierActor.session.profile.username,
-          entity: "order",
-          entityId: order.id,
-          details: {
-            order_number: order.order_number,
-            midtrans_order_id: latestTx.midtrans_order_id,
-            gross_amount: latestTx.gross_amount,
-            reason: "retry_after_deny_confirmed",
-          },
+      if (rawStatus === "deny") {
+        verifiedReleasable.push({
+          tx,
+          nextLifecycle: "denied",
+          rawStatus: "deny",
+          auditReason: "retry_after_deny_confirmed",
         });
-      } else {
-        // Status tidak dikenal atau challenge
-        return {
-          ok: false,
-          message: `Transaksi Midtrans dalam status '${rawStatus}' dan belum dapat dibuatkan token baru. Batalkan reservasi terlebih dahulu jika ingin mencoba metode lain.`,
-        };
+        continue;
       }
+
+      return {
+        ok: false,
+        message: `Transaksi Midtrans (${tx.midtrans_order_id}) dalam status '${rawStatus}' dan belum dapat dibuatkan token baru. Batalkan reservasi terlebih dahulu jika ingin mencoba metode lain.`,
+      };
     } else if (statusCheck.httpStatus === 404) {
-      // HTTP 404: Pelanggan belum pernah memilih payment method di Snap
-      const isExpiredByTime = isMidtransTransactionExpired(latestTx.payment_expires_at);
+      const isExpiredByTime = isMidtransTransactionExpired(tx.payment_expires_at);
       if (!isExpiredByTime) {
         return {
           ok: false,
           message:
-            "Token Snap sebelumnya masih berlaku dan belum kedaluwarsa. Silakan buka ulang Snap atau batalkan reservasi jika ingin membuat transaksi baru.",
+            `Token Snap (${tx.midtrans_order_id}) masih berlaku dan belum kedaluwarsa. Silakan buka ulang Snap atau batalkan reservasi jika ingin membuat transaksi baru.`,
         };
       }
 
-      // Sudah kedaluwarsa berdasarkan payment_expires_at dan transaksi core 404 -> aman dilepas
-      const nowIso = new Date().toISOString();
-      await adminClient
-        .from("midtrans_transactions")
-        .update({
-          lifecycle_status: "expired",
-          midtrans_transaction_status: "expire",
-          updated_at: nowIso,
-        })
-        .eq("id", latestTx.id)
-        .in("lifecycle_status", ["initiated", "token_created", "pending"]);
-
-      await adminClient
-        .from("order_allocations")
-        .update({
-          allocation_status: "released",
-          updated_at: nowIso,
-        })
-        .eq("midtrans_transaction_id", latestTx.id)
-        .eq("allocation_status", "reserved");
-
-      await logAudit({
-        action: "midtrans.reservation_released",
-        userId: cashierActor.session.profile.id,
-        username: cashierActor.session.profile.username,
-        entity: "order",
-        entityId: order.id,
-        details: {
-          order_number: order.order_number,
-          midtrans_order_id: latestTx.midtrans_order_id,
-          gross_amount: latestTx.gross_amount,
-          reason: "retry_after_snap_404_expired",
-        },
+      verifiedReleasable.push({
+        tx,
+        nextLifecycle: "expired",
+        rawStatus: "expire",
+        auditReason: "retry_after_snap_404_expired",
       });
     }
+  }
+
+  // Phase 2: Semua attempt lama telah terverifikasi aman -> lepas reservasi terminal/expired
+  const nowIso = new Date().toISOString();
+  for (const item of verifiedReleasable) {
+    await adminClient
+      .from("midtrans_transactions")
+      .update({
+        lifecycle_status: item.nextLifecycle,
+        midtrans_transaction_status: item.rawStatus,
+        updated_at: nowIso,
+      })
+      .eq("id", item.tx.id)
+      .in("lifecycle_status", [
+        "initiated",
+        "token_created",
+        "pending",
+        "capture_challenge",
+        "reconciliation_required",
+      ]);
+
+    await adminClient
+      .from("order_allocations")
+      .update({
+        allocation_status: "released",
+        updated_at: nowIso,
+      })
+      .eq("midtrans_transaction_id", item.tx.id)
+      .eq("allocation_status", "reserved");
+
+    await logAudit({
+      action: "midtrans.reservation_released",
+      userId: cashierActor.session.profile.id,
+      username: cashierActor.session.profile.username,
+      entity: "order",
+      entityId: order.id,
+      details: {
+        order_number: order.order_number,
+        midtrans_order_id: item.tx.midtrans_order_id,
+        gross_amount: item.tx.gross_amount,
+        reason: item.auditReason,
+      },
+    });
   }
 
   // 3. Buat transaksi Snap baru dengan attempt nomor berikutnya
@@ -1463,17 +1503,23 @@ export async function getOrderPaymentSummaryAction(
  */
 export async function cancelActiveMidtransReservationAction(
   orderId: string,
+  options?: {
+    mode?: "cancel_order" | "release_to_cash" | "official_pending_cancel";
+    reason?: string;
+  },
 ): Promise<
   PaymentActionResult<{
     orderId: string;
     orderNumber: string;
     released: boolean;
+    orderCancelled?: boolean;
     wasAlreadySettled: boolean;
     isSettled: boolean;
     reservedAmount: number;
     availableForCashAmount: number;
   }>
 > {
+  const mode = options?.mode ?? "cancel_order";
   const cashierActor = await getCashierActor();
   if (!cashierActor.ok) {
     return { ok: false, message: cashierActor.message };
@@ -1508,7 +1554,54 @@ export async function cancelActiveMidtransReservationAction(
     return { ok: false, message: "Pesanan tidak ditemukan." };
   }
 
-  if (order.payment_status === "paid" || order.status === "paid") {
+  // Idempotent handler: pesanan sudah dibatalkan sebelumnya
+  if (order.status === "cancelled") {
+    await Promise.all([
+      adminClient
+        .from("order_allocations")
+        .update({
+          allocation_status: "released",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("order_id", order.id)
+        .eq("allocation_status", "reserved"),
+      adminClient.rpc("release_order_stock_reservations_internal", {
+        p_order_id: order.id,
+      }),
+    ]);
+
+    revalidatePath("/pos");
+    revalidatePath("/pos/floor");
+    revalidatePath("/pos/orders");
+    revalidatePath("/kitchen");
+    revalidatePath("/queue");
+
+    return {
+      ok: true,
+      message: `Pesanan #${order.order_number} sudah dibatalkan sebelumnya. Seluruh reservasi stok & gateway telah dipastikan terlepas.`,
+      data: {
+        orderId: order.id,
+        orderNumber: order.order_number,
+        released: true,
+        orderCancelled: true,
+        wasAlreadySettled: false,
+        isSettled: false,
+        reservedAmount: 0,
+        availableForCashAmount: 0,
+      },
+    };
+  }
+
+  if (isOrderCancelledOrRefunded(order)) {
+    return {
+      ok: false,
+      errorCode: "ORDER_CANCELLED",
+      meta: { orderStatus: order.status },
+      message: `Pesanan #${order.order_number} berstatus ${order.status}. Pesanan yang sudah direfund tidak dapat memproses ulang reservasi.`,
+    };
+  }
+
+  if (order.payment_status === "paid" || order.status === "paid" || order.status === "completed") {
     return {
       ok: true,
       message: `Pesanan #${order.order_number} sudah berstatus lunas.`,
@@ -1516,6 +1609,7 @@ export async function cancelActiveMidtransReservationAction(
         orderId: order.id,
         orderNumber: order.order_number,
         released: false,
+        orderCancelled: false,
         wasAlreadySettled: true,
         isSettled: true,
         reservedAmount: 0,
@@ -1524,90 +1618,78 @@ export async function cancelActiveMidtransReservationAction(
     };
   }
 
-  const { activeMidtransTx } = await loadOrderReservationState(order.id);
-
-  if (!activeMidtransTx) {
-    const availability = computeOrderPaymentAvailability({
-      grandTotal: order.grand_total,
-      paidTotal: order.paid_total,
-      reservedAmount: 0,
+  // A. Pesanan belum memiliki pembayaran masuk (`paid_total === 0` / `canCancelOrder`)
+  if (canCancelOrder(order)) {
+    const gatewayCheck = await verifyAndReleaseGatewayBeforeOrderCancel({
+      orderId: order.id,
+      actorUserId: cashierActor.session.profile.id,
+      actorUsername: cashierActor.session.profile.username,
+      allowCancelPendingGateway: mode !== "release_to_cash",
+      allowUnexpired404Release: true,
     });
-    return {
-      ok: true,
-      message: "Tidak ada reservasi Midtrans aktif pada pesanan ini.",
-      data: {
-        orderId: order.id,
-        orderNumber: order.order_number,
-        released: true,
-        wasAlreadySettled: false,
-        isSettled: false,
-        reservedAmount: 0,
-        availableForCashAmount: availability.availableForCashAmount,
-      },
-    };
-  }
 
-  if (!activeMidtransTx.canCancel) {
-    return {
-      ok: false,
-      message: `Transaksi Midtrans (${activeMidtransTx.lifecycleStatus}) memerlukan evaluasi admin dan tidak dapat dibatalkan langsung.`,
-    };
-  }
+    if (!gatewayCheck.ok) {
+      if (gatewayCheck.blockedBySettlement) {
+        const postState = await loadOrderReservationState(order.id);
+        revalidatePath("/pos");
+        revalidatePath("/pos/orders");
+        revalidatePath("/kitchen");
 
-  // 1. WAJIB cek status aktual di Midtrans Core API sebelum membatalkan
-  const statusCheck = await getMidtransStatus(activeMidtransTx.midtransOrderId);
+        const { data: dbOrder } = await adminClient
+          .from("orders")
+          .select("status, payment_status, paid_total, grand_total")
+          .eq("id", order.id)
+          .maybeSingle();
 
-  if (statusCheck.ok && statusCheck.status) {
-    const rawStatus = (statusCheck.status.transaction_status || "")
-      .trim()
-      .toLowerCase();
-    const fraudStatus = (statusCheck.status.fraud_status || "")
-      .trim()
-      .toLowerCase();
+        const isActuallySettledInDb = Boolean(
+          dbOrder &&
+            !isOrderCancelledOrRefunded(dbOrder) &&
+            dbOrder.payment_status === "paid" &&
+            Number(dbOrder.paid_total) >= Number(dbOrder.grand_total),
+        );
 
-    // Jika ternyata SUDAH LUNAS di Midtrans -> JANGAN dibatalkan, langsung rekonsiliasi!
-    if (isMidtransPaidStatus(rawStatus, fraudStatus)) {
-      await reconcileActiveMidtransPayment({ orderId });
-      const postState = await loadOrderReservationState(order.id);
-      revalidatePath("/pos");
-      revalidatePath("/pos/orders");
-      revalidatePath("/kitchen");
+        return {
+          ok: true,
+          message: isActuallySettledInDb
+            ? "Pembatalan dihentikan: Transaksi Midtrans ini sudah LUNAS terverifikasi di Midtrans. Pembayaran ganda berhasil dicegah."
+            : "Transaksi berstatus settlement/capture di Midtrans namun sinkronisasi database sedang berlangsung. Pembatalan dicegah.",
+          data: {
+            orderId: order.id,
+            orderNumber: order.order_number,
+            released: false,
+            orderCancelled: false,
+            wasAlreadySettled: true,
+            isSettled: isActuallySettledInDb,
+            reservedAmount: postState.reservedAmount,
+            availableForCashAmount: 0,
+          },
+        };
+      }
 
-      const adminClient = createSupabaseAdminClient();
-      const { data: dbOrder } = adminClient
-        ? await adminClient
-            .from("orders")
-            .select("payment_status, paid_total, grand_total")
-            .eq("id", order.id)
-            .maybeSingle()
-        : { data: null };
-
-      const isActuallySettledInDb = Boolean(
-        dbOrder &&
-        dbOrder.payment_status === "paid" &&
-        Number(dbOrder.paid_total) >= Number(dbOrder.grand_total)
-      );
+      if (gatewayCheck.blockedByPending) {
+        return {
+          ok: false,
+          errorCode: "PENDING_GATEWAY",
+          meta: {
+            isPendingGateway: true,
+            pendingMidtransOrderIds: gatewayCheck.pendingMidtransOrderIds,
+          },
+          message: gatewayCheck.message,
+        };
+      }
 
       return {
-        ok: true,
-        message: isActuallySettledInDb
-          ? "Pembatalan dihentikan: Transaksi Midtrans ini sudah LUNAS terverifikasi di Midtrans. Pembayaran ganda berhasil dicegah."
-          : "Transaksi berstatus settlement di Midtrans namun sinkronisasi database sedang berlangsung. Pembatalan dicegah.",
-        data: {
-          orderId: order.id,
-          orderNumber: order.order_number,
-          released: false,
-          wasAlreadySettled: true,
-          isSettled: isActuallySettledInDb,
-          reservedAmount: postState.reservedAmount,
-          availableForCashAmount: 0,
-        },
+        ok: false,
+        errorCode: gatewayCheck.isGatewayUnreachable
+          ? "GATEWAY_UNREACHABLE"
+          : gatewayCheck.requiresAdminReconciliation
+            ? "RECONCILIATION_REQUIRED"
+            : undefined,
+        message: gatewayCheck.message,
       };
     }
 
-    // Jika sudah terminal (expire/cancel/deny) di Midtrans -> rekonsiliasi & lepas reservasi
-    if (["expire", "cancel", "deny"].includes(rawStatus)) {
-      await reconcileActiveMidtransPayment({ orderId });
+    if (mode === "release_to_cash") {
       const postState = await loadOrderReservationState(order.id);
       const availability = computeOrderPaymentAvailability({
         grandTotal: order.grand_total,
@@ -1619,11 +1701,13 @@ export async function cancelActiveMidtransReservationAction(
 
       return {
         ok: true,
-        message: `Transaksi Midtrans sudah berstatus ${rawStatus}. Reservasi berhasil dilepas; silakan lanjutkan pembayaran.`,
+        message:
+          "Reservasi Midtrans terkonfirmasi berakhir & berhasil dilepas. Silakan lanjutkan pembayaran Tunai atau buat transaksi Midtrans baru.",
         data: {
           orderId: order.id,
           orderNumber: order.order_number,
           released: true,
+          orderCancelled: false,
           wasAlreadySettled: false,
           isSettled: false,
           reservedAmount: availability.reservedAmount,
@@ -1632,18 +1716,262 @@ export async function cancelActiveMidtransReservationAction(
       };
     }
 
-    // Jika pending di Midtrans -> panggil POST /v2/{order_id}/cancel ke Midtrans
-    if (rawStatus === "pending") {
-      const cancelRes = await cancelMidtransTransaction(
-        activeMidtransTx.midtransOrderId,
-      );
+    // Mode "cancel_order" atau "official_pending_cancel": batalkan pesanan atomik via cancel_pos_order RPC
+    const supabase = await createSupabaseServerClient();
+    if (!supabase) {
+      return { ok: false, message: "Klien database sesi tidak tersedia." };
+    }
 
+    const cancelReason =
+      options?.reason?.trim() ||
+      (mode === "official_pending_cancel"
+        ? "Pembatalan resmi transaksi Midtrans pending dan pesanan oleh kasir"
+        : "Pembatalan Midtrans kedaluwarsa/batal & pelepasan reservasi oleh kasir");
+
+    const { data: rpcData, error: rpcError } = await supabase.rpc(
+      "cancel_pos_order",
+      {
+        p_order_id: order.id,
+        p_cancel_reason: cancelReason,
+      },
+    );
+
+    if (rpcError) {
+      return {
+        ok: false,
+        message: rpcError.message || "Gagal membatalkan pesanan setelah verifikasi Midtrans.",
+      };
+    }
+
+    // Safeguard idempoten pelepasan stok & alokasi
+    await Promise.all([
+      adminClient.rpc("release_order_stock_reservations_internal", {
+        p_order_id: order.id,
+      }),
+      adminClient
+        .from("order_allocations")
+        .update({
+          allocation_status: "released",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("order_id", order.id)
+        .eq("allocation_status", "reserved"),
+    ]);
+
+    await logAudit({
+      action: "order.cancel",
+      userId: cashierActor.session.profile.id,
+      username: cashierActor.session.profile.username,
+      entity: "order",
+      entityId: order.id,
+      details: {
+        order_number: order.order_number,
+        reason: cancelReason,
+        mode,
+        released_gateway_attempts: gatewayCheck.releasedGatewayCount,
+        rpc_result: rpcData,
+      },
+    });
+
+    revalidatePath("/pos");
+    revalidatePath("/pos/floor");
+    revalidatePath("/pos/orders");
+    revalidatePath("/kitchen");
+    revalidatePath("/queue");
+    revalidatePath("/admin/tables");
+    revalidatePath("/admin/transactions");
+    revalidatePath("/admin/inventory");
+
+    return {
+      ok: true,
+      message: `Pesanan #${order.order_number} berhasil dibatalkan setelah verifikasi Midtrans dan seluruh reservasi telah dilepas.`,
+      data: {
+        orderId: order.id,
+        orderNumber: order.order_number,
+        released: true,
+        orderCancelled: true,
+        wasAlreadySettled: false,
+        isSettled: false,
+        reservedAmount: 0,
+        availableForCashAmount: 0,
+      },
+    };
+  }
+
+  // B. Split bill sebagian dibayar (`paid_total > 0`): hanya lepas reservasi Midtrans tanpa membatalkan bagian lunas
+  const { data: candidateTxs } = await adminClient
+    .from("midtrans_transactions")
+    .select(
+      "id, midtrans_order_id, gross_amount, lifecycle_status, midtrans_transaction_status, payment_expires_at, created_at",
+    )
+    .eq("order_id", order.id)
+    .in("lifecycle_status", [
+      "settled",
+      ...ACTIVE_RESERVATION_LIFECYCLE_STATUSES,
+    ])
+    .order("created_at", { ascending: false });
+
+  const txList = (candidateTxs ?? []) as Array<{
+    id: string;
+    midtrans_order_id: string;
+    gross_amount: number;
+    lifecycle_status: MidtransLifecycleStatus;
+    midtrans_transaction_status: string | null;
+    payment_expires_at: string;
+    created_at: string;
+  }>;
+
+  if (txList.length === 0) {
+    const availability = computeOrderPaymentAvailability({
+      grandTotal: order.grand_total,
+      paidTotal: order.paid_total,
+      reservedAmount: 0,
+    });
+    return {
+      ok: true,
+      message: "Tidak ada reservasi Midtrans aktif pada pesanan split bill ini.",
+      data: {
+        orderId: order.id,
+        orderNumber: order.order_number,
+        released: true,
+        orderCancelled: false,
+        wasAlreadySettled: false,
+        isSettled: false,
+        reservedAmount: 0,
+        availableForCashAmount: availability.availableForCashAmount,
+      },
+    };
+  }
+
+  const activeNonSettledTxs = txList.filter((t) => t.lifecycle_status !== "settled");
+  const blockedTx = activeNonSettledTxs.find(
+    (tx) =>
+      !canCancelMidtransReservation(tx.lifecycle_status) ||
+      tx.lifecycle_status === "capture_challenge" ||
+      (tx.lifecycle_status === "reconciliation_required" &&
+        tx.midtrans_transaction_status !== null),
+  );
+  if (blockedTx) {
+    return {
+      ok: false,
+      errorCode: "RECONCILIATION_REQUIRED",
+      message: `Transaksi Midtrans (${blockedTx.midtrans_order_id}: ${blockedTx.lifecycle_status}) memerlukan evaluasi admin dan tidak dapat dibatalkan langsung.`,
+    };
+  }
+
+  type PlannedTxRelease =
+    | { tx: (typeof txList)[number]; kind: "cancel_pending" }
+    | { tx: (typeof txList)[number]; kind: "reconcile_terminal"; rawStatus: string }
+    | { tx: (typeof txList)[number]; kind: "release_404"; isExpired: boolean };
+
+  const plannedActions: PlannedTxRelease[] = [];
+
+  for (const tx of activeNonSettledTxs) {
+    const statusCheck = await getMidtransStatus(tx.midtrans_order_id);
+
+    if (!statusCheck.ok && statusCheck.httpStatus !== 404) {
+      return {
+        ok: false,
+        errorCode: "GATEWAY_UNREACHABLE",
+        message:
+          statusCheck.error ||
+          `Tidak dapat memverifikasi status transaksi (${tx.midtrans_order_id}) ke Midtrans. Reservasi tidak dilepas demi mencegah pembayaran ganda.`,
+      };
+    }
+
+    if (statusCheck.ok && statusCheck.status) {
+      const rawStatus = (statusCheck.status.transaction_status || "")
+        .trim()
+        .toLowerCase();
+      const fraudStatus = (statusCheck.status.fraud_status || "")
+        .trim()
+        .toLowerCase();
+
+      if (isMidtransPaidStatus(rawStatus, fraudStatus)) {
+        await reconcileActiveMidtransPayment({ orderId });
+        const postState = await loadOrderReservationState(order.id);
+        revalidatePath("/pos");
+        revalidatePath("/pos/orders");
+        revalidatePath("/kitchen");
+
+        const { data: dbOrder } = await adminClient
+          .from("orders")
+          .select("status, payment_status, paid_total, grand_total")
+          .eq("id", order.id)
+          .maybeSingle();
+
+        const isActuallySettledInDb = Boolean(
+          dbOrder &&
+            !isOrderCancelledOrRefunded(dbOrder) &&
+            dbOrder.payment_status === "paid" &&
+            Number(dbOrder.paid_total) >= Number(dbOrder.grand_total),
+        );
+
+        return {
+          ok: true,
+          message: isActuallySettledInDb
+            ? "Pembatalan dihentikan: Transaksi Midtrans ini sudah LUNAS terverifikasi di Midtrans. Pembayaran ganda berhasil dicegah."
+            : "Transaksi berstatus settlement di Midtrans namun sinkronisasi database sedang berlangsung. Pembatalan dicegah.",
+          data: {
+            orderId: order.id,
+            orderNumber: order.order_number,
+            released: false,
+            orderCancelled: false,
+            wasAlreadySettled: true,
+            isSettled: isActuallySettledInDb,
+            reservedAmount: postState.reservedAmount,
+            availableForCashAmount: 0,
+          },
+        };
+      }
+
+      if (["expire", "cancel", "deny"].includes(rawStatus)) {
+        plannedActions.push({ tx, kind: "reconcile_terminal", rawStatus });
+        continue;
+      }
+
+      if (rawStatus === "pending") {
+        if (mode === "release_to_cash") {
+          return {
+            ok: false,
+            errorCode: "PENDING_GATEWAY",
+            meta: {
+              isPendingGateway: true,
+              pendingMidtransOrderIds: [tx.midtrans_order_id],
+            },
+            message: `Transaksi Midtrans (${tx.midtrans_order_id}) masih berstatus PENDING di gateway (menunggu pelanggan). Gunakan pembatalan resmi Midtrans jika benar-benar ingin membatalkannya.`,
+          };
+        }
+        plannedActions.push({ tx, kind: "cancel_pending" });
+        continue;
+      }
+
+      return {
+        ok: false,
+        message: `Transaksi Midtrans (${tx.midtrans_order_id}) dalam status '${rawStatus}' dan tidak dapat dibatalkan otomatis.`,
+      };
+    }
+
+    if (statusCheck.httpStatus === 404) {
+      plannedActions.push({
+        tx,
+        kind: "release_404",
+        isExpired: isMidtransTransactionExpired(tx.payment_expires_at),
+      });
+    }
+  }
+
+  let hadReconcileTerminal = false;
+  for (const plan of plannedActions) {
+    if (plan.kind === "cancel_pending") {
+      const cancelRes = await cancelMidtransTransaction(plan.tx.midtrans_order_id);
       if (!cancelRes.ok || !cancelRes.isCancelled) {
         return {
           ok: false,
+          errorCode: !cancelRes.httpStatus ? "GATEWAY_UNREACHABLE" : undefined,
           message:
             cancelRes.error ||
-            "Midtrans menolak pembatalan transaksi pending. Klik 'Cek Status Pembayaran' untuk memastikan pelanggan belum menyelesaikan pembayaran.",
+            `Midtrans menolak pembatalan transaksi pending (${plan.tx.midtrans_order_id}).`,
         };
       }
 
@@ -1655,126 +1983,92 @@ export async function cancelActiveMidtransReservationAction(
         entityId: order.id,
         details: {
           order_number: order.order_number,
-          midtrans_order_id: activeMidtransTx.midtransOrderId,
-          gross_amount: activeMidtransTx.grossAmount,
+          midtrans_order_id: plan.tx.midtrans_order_id,
+          gross_amount: plan.tx.gross_amount,
           reason: "cashier_cancelled_pending_gateway",
         },
       });
+    } else if (plan.kind === "reconcile_terminal") {
+      hadReconcileTerminal = true;
+    } else if (plan.kind === "release_404") {
+      const nowIso = new Date().toISOString();
+      const nextLifecycle = plan.isExpired ? "expired" : "cancelled";
+      const nextRawStatus = plan.isExpired ? "expire" : "cancel";
 
-      const postState = await loadOrderReservationState(order.id);
-      const availability = computeOrderPaymentAvailability({
-        grandTotal: order.grand_total,
-        paidTotal: order.paid_total,
-        reservedAmount: postState.reservedAmount,
-      });
-      revalidatePath("/pos");
-      revalidatePath("/pos/orders");
+      const { data: updatedTx, error: updateErr } = await adminClient
+        .from("midtrans_transactions")
+        .update({
+          lifecycle_status: nextLifecycle,
+          midtrans_transaction_status: nextRawStatus,
+          updated_at: nowIso,
+        })
+        .eq("id", plan.tx.id)
+        .in("lifecycle_status", ["initiated", "token_created", "pending", "reconciliation_required"])
+        .select("id")
+        .maybeSingle();
 
-      return {
-        ok: true,
-        message:
-          "Transaksi Midtrans berhasil dibatalkan dan reservasi dilepas. Anda kini dapat memproses pembayaran Tunai atau membuat transaksi Midtrans baru.",
-        data: {
-          orderId: order.id,
-          orderNumber: order.order_number,
-          released: true,
-          wasAlreadySettled: false,
-          isSettled: false,
-          reservedAmount: availability.reservedAmount,
-          availableForCashAmount: availability.availableForCashAmount,
+      if (updateErr || !updatedTx) {
+        return {
+          ok: false,
+          message:
+            "Status transaksi Midtrans baru saja berubah. Silakan muat ulang status pembayaran.",
+        };
+      }
+
+      await adminClient
+        .from("order_allocations")
+        .update({
+          allocation_status: "released",
+          updated_at: nowIso,
+        })
+        .eq("midtrans_transaction_id", updatedTx.id)
+        .eq("allocation_status", "reserved");
+
+      await logAudit({
+        action: "midtrans.reservation_cancelled",
+        userId: cashierActor.session.profile.id,
+        username: cashierActor.session.profile.username,
+        entity: "order",
+        entityId: order.id,
+        details: {
+          order_number: order.order_number,
+          midtrans_order_id: plan.tx.midtrans_order_id,
+          gross_amount: plan.tx.gross_amount,
+          reason: plan.isExpired
+            ? "expired_snap_404_released"
+            : "unstarted_snap_404_cancelled",
         },
-      };
+      });
     }
-
-    return {
-      ok: false,
-      message: `Transaksi Midtrans dalam status '${rawStatus}' dan tidak dapat dibatalkan otomatis.`,
-    };
   }
 
-  // 2. Jika HTTP 404 dari Midtrans: pelanggan belum pernah memilih metode bayar di popup Snap
-  if (statusCheck.httpStatus === 404) {
-    const nowIso = new Date().toISOString();
-    const nextLifecycle = activeMidtransTx.isExpired ? "expired" : "cancelled";
-    const nextRawStatus = activeMidtransTx.isExpired ? "expire" : "cancel";
-
-    const { data: updatedTx, error: updateErr } = await adminClient
-      .from("midtrans_transactions")
-      .update({
-        lifecycle_status: nextLifecycle,
-        midtrans_transaction_status: nextRawStatus,
-        updated_at: nowIso,
-      })
-      .eq("id", activeMidtransTx.id)
-      .in("lifecycle_status", ["initiated", "token_created", "pending"])
-      .select("id")
-      .maybeSingle();
-
-    if (updateErr || !updatedTx) {
-      return {
-        ok: false,
-        message:
-          "Status transaksi Midtrans baru saja berubah. Silakan muat ulang status pembayaran.",
-      };
-    }
-
-    await adminClient
-      .from("order_allocations")
-      .update({
-        allocation_status: "released",
-        updated_at: nowIso,
-      })
-      .eq("midtrans_transaction_id", updatedTx.id)
-      .eq("allocation_status", "reserved");
-
-    await logAudit({
-      action: "midtrans.reservation_cancelled",
-      userId: cashierActor.session.profile.id,
-      username: cashierActor.session.profile.username,
-      entity: "order",
-      entityId: order.id,
-      details: {
-        order_number: order.order_number,
-        midtrans_order_id: activeMidtransTx.midtransOrderId,
-        gross_amount: activeMidtransTx.grossAmount,
-        reason: activeMidtransTx.isExpired
-          ? "expired_snap_404_released"
-          : "unstarted_snap_404_cancelled",
-      },
-    });
-
-    const postState = await loadOrderReservationState(order.id);
-    const availability = computeOrderPaymentAvailability({
-      grandTotal: order.grand_total,
-      paidTotal: order.paid_total,
-      reservedAmount: postState.reservedAmount,
-    });
-    revalidatePath("/pos");
-    revalidatePath("/pos/orders");
-
-    return {
-      ok: true,
-      message: activeMidtransTx.isExpired
-        ? "Reservasi Midtrans yang kedaluwarsa berhasil dilepas. Silakan lanjutkan pembayaran Tunai atau Midtrans."
-        : "Reservasi Snap Midtrans berhasil dibatalkan. Silakan lanjutkan pembayaran Tunai atau Midtrans.",
-      data: {
-        orderId: order.id,
-        orderNumber: order.order_number,
-        released: true,
-        wasAlreadySettled: false,
-        isSettled: false,
-        reservedAmount: availability.reservedAmount,
-        availableForCashAmount: availability.availableForCashAmount,
-      },
-    };
+  if (hadReconcileTerminal) {
+    await reconcileActiveMidtransPayment({ orderId });
   }
 
-  // 3. Fail-closed jika Midtrans API tidak dapat dihubungi
+  const postState = await loadOrderReservationState(order.id);
+  const availability = computeOrderPaymentAvailability({
+    grandTotal: order.grand_total,
+    paidTotal: order.paid_total,
+    reservedAmount: postState.reservedAmount,
+  });
+  revalidatePath("/pos");
+  revalidatePath("/pos/orders");
+
   return {
-    ok: false,
+    ok: true,
     message:
-      statusCheck.error ||
-      "Tidak dapat memverifikasi status transaksi ke Midtrans. Reservasi tidak dilepas demi mencegah pembayaran ganda.",
+      "Reservasi Midtrans sisa tagihan split bill berhasil dilepas (pembayaran sebelumnya tetap tercatat). Anda dapat melanjutkan sisa tagihan lewat Tunai atau Midtrans baru.",
+    data: {
+      orderId: order.id,
+      orderNumber: order.order_number,
+      released: true,
+      orderCancelled: false,
+      wasAlreadySettled: false,
+      isSettled: false,
+      reservedAmount: availability.reservedAmount,
+      availableForCashAmount: availability.availableForCashAmount,
+    },
   };
 }
 
@@ -1840,8 +2134,10 @@ export async function getOrderPaymentStatusAction(
     return { ok: false, message: "Pesanan tidak ditemukan." };
   }
 
+  const isCancelledOrRefunded = isOrderCancelledOrRefunded(order);
   const isInitialSettled =
-    order.payment_status === "paid" || order.status === "paid";
+    !isCancelledOrRefunded &&
+    (order.payment_status === "paid" || order.status === "paid");
 
   const initialReservation = await loadOrderReservationState(order.id);
   let midtransStatus: string | null = null;
@@ -1856,10 +2152,11 @@ export async function getOrderPaymentStatusAction(
 
   if (!currentSettled && initialReservation.activeMidtransTx) {
     const reconcileResult = await reconcileActiveMidtransPayment({ orderId });
+    midtransStatus = reconcileResult.midtransStatus ?? null;
+    reservationReleased = Boolean(reconcileResult.reservationReleased);
+
     if (reconcileResult.ok) {
-      midtransStatus = reconcileResult.midtransStatus ?? null;
       reconciliationMessage = reconcileResult.message ?? null;
-      reservationReleased = Boolean(reconcileResult.reservationReleased);
 
       if (
         reconcileResult.isSettled ||
@@ -1875,18 +2172,24 @@ export async function getOrderPaymentStatusAction(
           .maybeSingle();
 
         if (refreshedOrder) {
-          currentSettled =
-            (refreshedOrder.payment_status === "paid" ||
-              refreshedOrder.status === "paid") &&
-            Number(refreshedOrder.paid_total) >= Number(refreshedOrder.grand_total);
           currentPaidTotal = refreshedOrder.paid_total;
           currentStatus = refreshedOrder.status;
           currentPaymentStatus = refreshedOrder.payment_status;
           order.queue_number = refreshedOrder.queue_number;
+          currentSettled =
+            !isOrderCancelledOrRefunded(refreshedOrder) &&
+            (refreshedOrder.payment_status === "paid" ||
+              refreshedOrder.status === "paid") &&
+            Number(refreshedOrder.paid_total) >= Number(refreshedOrder.grand_total);
         }
 
         if (
           !currentSettled &&
+          !reconcileResult.reconciliationFlagged &&
+          !isOrderCancelledOrRefunded({
+            status: currentStatus,
+            payment_status: currentPaymentStatus,
+          }) &&
           (reconcileResult.midtransStatus === "settlement" ||
             reconcileResult.midtransStatus === "capture")
         ) {
@@ -1901,7 +2204,8 @@ export async function getOrderPaymentStatusAction(
         }
       }
     } else {
-      reconciliationMessage = reconcileResult.error ?? null;
+      reconciliationMessage =
+        reconcileResult.message ?? reconcileResult.error ?? null;
     }
   }
 

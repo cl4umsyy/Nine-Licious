@@ -206,25 +206,41 @@ function ReceiptModalContent({
           <div className="mx-auto grid size-11 place-items-center rounded-2xl bg-destructive/10 text-destructive">
             <AlertCircle className="size-5" />
           </div>
-          <div className="space-y-1">
-            <h4 className="font-display text-sm font-bold text-foreground">
-              Data Struk Belum Dapat Dimuat
-            </h4>
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              {loadError ||
-                "Gagal memuat rincian struk. Status pembayaran yang sudah lunas tetap tersimpan aman di sistem."}
-            </p>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={handleRetryLoad}
-            className="gap-1.5 rounded-xl text-xs font-semibold"
-          >
-            <RefreshCw className="size-3.5" />
-            Muat Ulang Struk
-          </Button>
+          {(loadError ?? "").toUpperCase().includes("DIBATALKAN") ? (
+            <div className="space-y-2">
+              <span className="inline-block rounded-md bg-destructive/15 px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wider text-destructive">
+                DIBATALKAN
+              </span>
+              <h4 className="font-display text-sm font-bold text-foreground">
+                Pesanan Telah Dibatalkan
+              </h4>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                {loadError}
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="space-y-1">
+                <h4 className="font-display text-sm font-bold text-foreground">
+                  Data Struk Belum Dapat Dimuat
+                </h4>
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  {loadError ||
+                    "Gagal memuat rincian struk. Status pembayaran yang sudah lunas tetap tersimpan aman di sistem."}
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleRetryLoad}
+                className="gap-1.5 rounded-xl text-xs font-semibold"
+              >
+                <RefreshCw className="size-3.5" />
+                Muat Ulang Struk
+              </Button>
+            </>
+          )}
         </div>
       ) : (
         <div className="max-h-[72vh] overflow-y-auto bg-muted/20 p-4 print:max-h-none print:overflow-visible print:bg-white print:p-0">

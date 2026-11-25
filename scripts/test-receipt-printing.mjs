@@ -116,8 +116,9 @@ test("3. Error handler struk terpisah dari error handler pembayaran (tidak perna
 test("4. getOrderReceiptDataAction memiliki fallback read-only untuk Takeaway & memakai formatSafeReceiptError", () => {
   const actionsSrc = readProjectFile("src/lib/payments/actions.ts");
   const fnStart = actionsSrc.indexOf("export async function getOrderReceiptDataAction");
-  assert.ok(fnStart > 0);
-  const fnBody = actionsSrc.slice(fnStart, fnStart + 2500);
+  const fnEnd = actionsSrc.indexOf("export async function createPosMidtransSnapAction");
+  assert.ok(fnStart > 0 && fnEnd > fnStart);
+  const fnBody = actionsSrc.slice(fnStart, fnEnd);
 
   assert.match(fnBody, /buildOrderReceiptDataFallback/);
   assert.match(fnBody, /formatSafeReceiptError/);

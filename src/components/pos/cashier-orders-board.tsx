@@ -38,6 +38,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { formatRupiah } from "@/lib/menu/format";
+import { canPayOrder, canShowReceiptForOrder } from "@/lib/orders/status-rules";
 import {
   CASHIER_ORDER_FILTER_LABELS,
   CASHIER_ORDER_FILTERS,
@@ -551,17 +552,19 @@ export function CashierOrdersBoard({
         ) : (
           <section className="space-y-3">
             {filteredOrders.map((order) => {
-              const isUnpaid =
-                order.status === "awaiting_payment" ||
-                order.status === "partially_paid";
+              const isUnpaid = canPayOrder({
+                status: order.status,
+                paymentStatus: order.paymentStatus,
+              });
               const isReadyToServe =
                 order.status === "paid" &&
                 order.kdsStatus === "ready" &&
                 !order.servedAt;
-              const isPaidOrDone =
-                order.status === "paid" ||
-                order.status === "completed" ||
-                order.paymentStatus === "partially_refunded";
+              const isPaidOrDone = canShowReceiptForOrder({
+                status: order.status,
+                paymentStatus: order.paymentStatus,
+                paidTotal: order.paidTotal,
+              });
               const isLoadingThis = loadingOrderId === order.id;
 
               const paymentBadgeClass =
@@ -642,6 +645,22 @@ export function CashierOrdersBoard({
                               : ""}
                           </Badge>
                         )}
+
+                        {order.status === "cancelled" ? (
+                          <Badge
+                            variant="destructive"
+                            className="text-xs font-bold tracking-wide"
+                          >
+                            DIBATALKAN
+                          </Badge>
+                        ) : order.status === "refunded" ? (
+                          <Badge
+                            variant="destructive"
+                            className="text-xs font-bold tracking-wide"
+                          >
+                            DIREFUND
+                          </Badge>
+                        ) : null}
                       </div>
 
                       {/* Items Summary */}
@@ -843,6 +862,14 @@ export function CashierOrdersBoard({
         onClose={() => {
           setPaymentOrder(null);
           void syncOrders({ manual: false });
+        }}
+        onOrderCancelled={() => {
+          setPaymentOrder(null);
+          void syncOrders({ manual: false });
+        }}
+        onOpenCancelOrder={(order) => {
+          setPaymentOrder(null);
+          setOrderToCancel(order);
         }}
         onPaymentSuccess={(orderId, isSettled) => {
           setPaymentOrder(null);

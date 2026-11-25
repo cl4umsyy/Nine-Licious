@@ -23,6 +23,7 @@ import {
   unfinalizeOrderSchema,
 } from "@/lib/discounts/validation";
 import { getSupabaseConfig } from "@/lib/env";
+import { isOrderCancelledOrRefunded } from "@/lib/orders/status-rules";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import type { Discount, MenuCategory, Product, Profile } from "@/types/database";
@@ -562,6 +563,30 @@ export async function finalizeOrderAction(
     return { ok: false, message: "Supabase belum dikonfigurasi." };
   }
 
+  const { data: orderCheck } = await supabase
+    .from("orders")
+    .select("id, order_number, status, payment_status")
+    .eq("id", parsed.data.orderId)
+    .maybeSingle();
+
+  if (!orderCheck) {
+    return { ok: false, message: "Pesanan tidak ditemukan." };
+  }
+
+  if (isOrderCancelledOrRefunded(orderCheck)) {
+    return {
+      ok: false,
+      message: `Pesanan #${orderCheck.order_number} berstatus ${orderCheck.status} dan tidak dapat difinalisasi kembali.`,
+    };
+  }
+
+  if (orderCheck.status !== "awaiting_payment" || orderCheck.payment_status !== "unpaid") {
+    return {
+      ok: false,
+      message: `Pesanan #${orderCheck.order_number} berstatus ${orderCheck.status} dan tidak dapat difinalisasi.`,
+    };
+  }
+
   const { data, error } = await supabase.rpc("finalize_pos_order", {
     p_order_id: parsed.data.orderId,
   });
@@ -575,6 +600,7 @@ export async function finalizeOrderAction(
 
   revalidatePath("/pos");
   revalidatePath("/pos/floor");
+  revalidatePath("/pos/orders");
 
   return {
     ok: true,
@@ -607,6 +633,30 @@ export async function unfinalizeOrderAction(
     return { ok: false, message: "Supabase belum dikonfigurasi." };
   }
 
+  const { data: orderCheck } = await supabase
+    .from("orders")
+    .select("id, order_number, status, payment_status")
+    .eq("id", parsed.data.orderId)
+    .maybeSingle();
+
+  if (!orderCheck) {
+    return { ok: false, message: "Pesanan tidak ditemukan." };
+  }
+
+  if (isOrderCancelledOrRefunded(orderCheck)) {
+    return {
+      ok: false,
+      message: `Pesanan #${orderCheck.order_number} berstatus ${orderCheck.status} dan tidak dapat dibuka kembali atau difinalisasi.`,
+    };
+  }
+
+  if (orderCheck.status !== "awaiting_payment" || orderCheck.payment_status !== "unpaid") {
+    return {
+      ok: false,
+      message: `Pesanan #${orderCheck.order_number} tidak berstatus menunggu pembayaran dan tidak dapat dibuka kembali.`,
+    };
+  }
+
   const { data, error } = await supabase.rpc("unfinalize_pos_order", {
     p_order_id: parsed.data.orderId,
     p_reason: parsed.data.reason.trim(),
@@ -621,6 +671,7 @@ export async function unfinalizeOrderAction(
 
   revalidatePath("/pos");
   revalidatePath("/pos/floor");
+  revalidatePath("/pos/orders");
 
   return {
     ok: true,

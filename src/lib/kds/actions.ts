@@ -93,12 +93,14 @@ type RawRefundAlertRow = {
   kitchen_notified_at: string | null;
   orders:
     | {
+        status?: string;
         order_number: string;
         queue_number: string | null;
         order_type: OrderType;
         dining_tables: { name: string } | Array<{ name: string }> | null;
       }
     | Array<{
+        status?: string;
         order_number: string;
         queue_number: string | null;
         order_type: OrderType;
@@ -228,7 +230,7 @@ export async function getKdsBoardDataAction(): Promise<
           .from("orders")
           .select("id, dining_session_id, order_type, created_at")
           .in("dining_session_id", diningSessionIds)
-          .neq("status", "cancelled")
+          .not("status", "in", "(cancelled,refunded)")
           .order("created_at", { ascending: true })
       : Promise.resolve({ data: [] as RawSessionOrderRow[], error: null }),
   ]);
@@ -322,7 +324,7 @@ export async function getKdsBoardDataAction(): Promise<
       admin
         .from("refunds")
         .select(
-          "id, order_id, reason, kitchen_notified_at, orders(order_number, queue_number, order_type, dining_tables(name))",
+          "id, order_id, reason, kitchen_notified_at, orders(status, order_number, queue_number, order_type, dining_tables(name))",
         )
         .eq("refund_type", "full")
         .not("kitchen_notified_at", "is", null)
@@ -346,7 +348,13 @@ export async function getKdsBoardDataAction(): Promise<
 
     if (!refundRes.error && refundRes.data) {
       refundAlerts = (refundRes.data as RawRefundAlertRow[])
-        .filter((row) => Boolean(row.kitchen_notified_at))
+        .filter((row) => {
+          if (!row.kitchen_notified_at) return false;
+          const orderObj = Array.isArray(row.orders)
+            ? row.orders[0]
+            : row.orders;
+          return orderObj?.status !== "cancelled";
+        })
         .map((row) => {
           const orderObj = Array.isArray(row.orders)
             ? row.orders[0]

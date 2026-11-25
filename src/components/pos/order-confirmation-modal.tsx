@@ -50,6 +50,12 @@ import {
   ORDER_STATUS_LABELS,
   ORDER_TYPE_LABELS,
 } from "@/lib/orders/constants";
+import {
+  canCancelOrder,
+  canPayOrder,
+  canShowReceiptForOrder,
+  isOrderCancelledOrRefunded,
+} from "@/lib/orders/status-rules";
 import type { OrderWithDetails } from "@/lib/orders/types";
 
 export type OrderConfirmationModalProps = {
@@ -195,49 +201,51 @@ export function OrderConfirmationModal({
 
           {/* Content */}
           <div className="flex-1 overflow-y-auto p-5 space-y-4 text-xs">
-            {/* Finalization Banner */}
-            {isFinalized ? (
-              <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 flex items-center justify-between text-emerald-800 dark:text-emerald-300">
-                <div className="flex items-center gap-2">
-                  <Lock className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
-                  <span className="font-medium text-[11px]">
-                    Pesanan sudah difinalisasi. Penambahan item dan diskon terkunci.
-                  </span>
-                </div>
+            {/* Finalization Banner (strictly hidden on cancelled/refunded/paid orders) */}
+            {canPayOrder(currentOrder) ? (
+              isFinalized ? (
+                <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 flex items-center justify-between text-emerald-800 dark:text-emerald-300">
+                  <div className="flex items-center gap-2">
+                    <Lock className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                    <span className="font-medium text-[11px]">
+                      Pesanan sudah difinalisasi. Penambahan item dan diskon terkunci.
+                    </span>
+                  </div>
 
-                {isAdmin && (
+                  {isAdmin && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setIsUnfinalizeDialogOpen(true)}
+                      className="h-8 px-3 text-xs font-semibold border-emerald-500/40 text-emerald-700 dark:text-emerald-300 bg-background/80 hover:bg-background shrink-0 rounded-lg gap-1.5"
+                    >
+                      <Unlock className="size-3.5" />
+                      Buka Kembali
+                    </Button>
+                  )}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 flex items-center justify-between text-amber-800 dark:text-amber-300">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                    <span className="font-medium text-[11px]">
+                      Pesanan belum difinalisasi. Finalisasi untuk mengunci item sebelum pembayaran.
+                    </span>
+                  </div>
+
                   <Button
                     type="button"
-                    variant="outline"
                     size="sm"
-                    onClick={() => setIsUnfinalizeDialogOpen(true)}
-                    className="h-8 px-3 text-xs font-semibold border-emerald-500/40 text-emerald-700 dark:text-emerald-300 bg-background/80 hover:bg-background shrink-0 rounded-lg gap-1.5"
+                    onClick={() => setIsFinalizeAlertOpen(true)}
+                    className="h-8 px-3 text-xs font-bold bg-primary text-primary-foreground shrink-0 shadow-xs rounded-lg gap-1.5"
                   >
-                    <Unlock className="size-3.5" />
-                    Buka Kembali
+                    <Lock className="size-3.5" />
+                    Finalisasi Sekarang
                   </Button>
-                )}
-              </div>
-            ) : (
-              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 flex items-center justify-between text-amber-800 dark:text-amber-300">
-                <div className="flex items-center gap-2">
-                  <AlertCircle className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
-                  <span className="font-medium text-[11px]">
-                    Pesanan belum difinalisasi. Finalisasi untuk mengunci item sebelum pembayaran.
-                  </span>
                 </div>
-
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={() => setIsFinalizeAlertOpen(true)}
-                  className="h-8 px-3 text-xs font-bold bg-primary text-primary-foreground shrink-0 shadow-xs rounded-lg gap-1.5"
-                >
-                  <Lock className="size-3.5" />
-                  Finalisasi Sekarang
-                </Button>
-              </div>
-            )}
+              )
+            ) : null}
 
             {/* Metadata Cards */}
             <div className="grid grid-cols-2 gap-2 text-xs">
@@ -407,7 +415,8 @@ export function OrderConfirmationModal({
             </div>
 
             {/* Payment Section */}
-            {currentOrder.payment_status === "paid" ? (
+            {currentOrder.payment_status === "paid" &&
+            canShowReceiptForOrder(currentOrder) ? (
               <div className="rounded-xl border border-emerald-500/30 p-4 bg-emerald-500/10 space-y-2.5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -435,19 +444,23 @@ export function OrderConfirmationModal({
                   </Button>
                 )}
               </div>
-            ) : currentOrder.status === "cancelled" ? (
+            ) : isOrderCancelledOrRefunded(currentOrder) ? (
               <div className="rounded-xl border border-destructive/30 p-4 bg-destructive/10 space-y-1">
                 <div className="flex items-center gap-2">
                   <Ban className="size-4 text-destructive" />
                   <h5 className="font-bold text-xs text-destructive">
-                    Pesanan Dibatalkan
+                    {currentOrder.status === "refunded"
+                      ? "Pesanan Direfund Penuh"
+                      : "Pesanan Dibatalkan"}
                   </h5>
                 </div>
                 <p className="text-[11px] text-muted-foreground leading-relaxed">
-                  Pesanan ini telah dibatalkan dan tidak dapat menerima pembayaran.
+                  {currentOrder.status === "refunded"
+                    ? "Pesanan ini telah direfund penuh dan tidak dapat menerima pembayaran baru."
+                    : "Pesanan ini telah dibatalkan dan tidak dapat menerima pembayaran."}
                 </p>
               </div>
-            ) : (
+            ) : canPayOrder(currentOrder) ? (
               <div className="rounded-xl border border-primary/20 p-4 bg-primary/5 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -515,21 +528,25 @@ export function OrderConfirmationModal({
                   </div>
                 )}
               </div>
-            )}
+            ) : null}
           </div>
 
           {/* Footer with generous spacing and touch-friendly buttons */}
           <DialogFooter className="p-4 sm:p-5 border-t bg-muted/20 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3">
-            <Button
-              type="button"
-              variant="outline"
-              size="default"
-              onClick={() => onOpenCancel(currentOrder)}
-              className="h-10 px-4 text-xs font-semibold text-destructive hover:bg-destructive/10 hover:text-destructive border-destructive/20 rounded-xl gap-2 transition-colors"
-            >
-              <Ban className="size-4" />
-              Batalkan Pesanan
-            </Button>
+            {canCancelOrder(currentOrder) ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="default"
+                onClick={() => onOpenCancel(currentOrder)}
+                className="h-10 px-4 text-xs font-semibold text-destructive hover:bg-destructive/10 hover:text-destructive border-destructive/20 rounded-xl gap-2 transition-colors"
+              >
+                <Ban className="size-4" />
+                Batalkan Pesanan
+              </Button>
+            ) : (
+              <div />
+            )}
 
             <Button
               type="button"

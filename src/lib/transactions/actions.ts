@@ -491,7 +491,14 @@ export async function getAdminTransactionsAction(
     const refundedTotal = o.refunded_total ?? 0;
     const netPaid = Math.max(0, o.paid_total - refundedTotal);
 
-    totalAmountSum += o.grand_total;
+    const countsTowardSales =
+      o.status !== "cancelled" &&
+      o.status !== "awaiting_payment" &&
+      !(o.payment_status === "unpaid" && o.paid_total <= 0);
+
+    if (countsTowardSales) {
+      totalAmountSum += o.grand_total;
+    }
     paidAmountSum += o.paid_total;
     totalRefundedSum += refundedTotal;
 

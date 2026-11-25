@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState, useTransition } from "react"
 import Link from "next/link";
 import {
   AlertCircle,
+  Ban,
   Banknote,
   CheckCircle,
   Clock,
@@ -35,6 +36,12 @@ import { cn } from "@/lib/utils";
 import { formatRupiah } from "@/lib/menu/format";
 import { calculateCumulativeItemAllocations } from "@/lib/midtrans/allocation";
 import type { ActiveMidtransReservationInfo } from "@/lib/midtrans/reservation";
+import {
+  canCancelOrder,
+  canPayOrder,
+  canShowReceiptForOrder,
+  isOrderCancelledOrRefunded,
+} from "@/lib/orders/status-rules";
 import type { OrderWithDetails } from "@/lib/orders/types";
 import {
   cancelActiveMidtransReservationAction,
@@ -72,6 +79,8 @@ export type PaymentModalProps = {
   isOpen: boolean;
   onClose: () => void;
   onPaymentSuccess: (orderId: string, isSettled: boolean) => void;
+  onOrderCancelled?: (orderId: string) => void;
+  onOpenCancelOrder?: (order: OrderWithDetails) => void;
   activeShift?: Shift | null;
 };
 
@@ -80,6 +89,8 @@ export function PaymentModal({
   isOpen,
   onClose,
   onPaymentSuccess,
+  onOrderCancelled,
+  onOpenCancelOrder,
   activeShift: propActiveShift,
 }: PaymentModalProps) {
   const [midtransWaiting, setMidtransWaiting] = useState(false);
@@ -167,6 +178,8 @@ export function PaymentModal({
             order={order}
             onClose={onClose}
             onPaymentSuccess={onPaymentSuccess}
+            onOrderCancelled={onOrderCancelled}
+            onOpenCancelOrder={onOpenCancelOrder}
             method={method}
             setMethod={setMethod}
             splitMode={splitMode}
@@ -199,6 +212,8 @@ function PaymentModalContent({
   order,
   onClose,
   onPaymentSuccess,
+  onOrderCancelled,
+  onOpenCancelOrder,
   method,
   setMethod,
   splitMode,
@@ -224,6 +239,8 @@ function PaymentModalContent({
   order: OrderWithDetails;
   onClose: () => void;
   onPaymentSuccess: (orderId: string, isSettled: boolean) => void;
+  onOrderCancelled?: (orderId: string) => void;
+  onOpenCancelOrder?: (order: OrderWithDetails) => void;
   method: PaymentMethodTab;
   setMethod: (m: PaymentMethodTab) => void;
   splitMode: SplitMode;
@@ -250,6 +267,10 @@ function PaymentModalContent({
   const [isSubmitting, startTransition] = useTransition();
   const [isVerifyingMidtrans, setIsVerifyingMidtrans] = useState(false);
   const [isCancellingMidtrans, setIsCancellingMidtrans] = useState(false);
+  const [pendingGatewayNotice, setPendingGatewayNotice] = useState<{
+    message: string;
+    midtransOrderIds: string[];
+  } | null>(null);
   const [paymentSummary, setPaymentSummary] =
     useState<OrderPaymentSummaryData | null>(null);
   const [snapLoadError, setSnapLoadError] = useState<string | null>(() =>
@@ -304,11 +325,34 @@ function PaymentModalContent({
     paymentSummary?.availableForCashAmount ?? effectiveRemainingBalance;
   const activeMidtransTx: ActiveMidtransReservationInfo | null =
     paymentSummary?.activeMidtransTx ?? null;
-  const isAlreadySettledInDb = Boolean(
-    paymentSummary
-      ? paymentSummary.isSettled && paymentSummary.paymentStatus === "paid"
-      : order.payment_status === "paid" || order.status === "paid",
-  );
+  const currentOrderStatus = paymentSummary?.status ?? order.status;
+  const currentPaymentStatus = paymentSummary?.paymentStatus ?? order.payment_status;
+  const currentPaidTotal = paymentSummary?.paidTotal ?? order.paid_total;
+  const isCancelledOrRefunded = isOrderCancelledOrRefunded({
+    status: currentOrderStatus,
+    payment_status: currentPaymentStatus,
+  });
+  const isOrderPayable = canPayOrder({
+    status: currentOrderStatus,
+    payment_status: currentPaymentStatus,
+  });
+  const canCancelCurrentOrder = canCancelOrder({
+    status: currentOrderStatus,
+    payment_status: currentPaymentStatus,
+    paid_total: currentPaidTotal,
+  });
+  const isAlreadySettledInDb =
+    !isCancelledOrRefunded &&
+    canShowReceiptForOrder({
+      status: currentOrderStatus,
+      payment_status: currentPaymentStatus,
+      paid_total: currentPaidTotal,
+    }) &&
+    Boolean(
+      paymentSummary
+        ? paymentSummary.isSettled && paymentSummary.paymentStatus === "paid"
+        : order.payment_status === "paid" || order.status === "paid",
+    );
 
   // Muat script Midtrans Snap secara dinamis untuk environment sandbox
   useEffect(() => {
@@ -432,6 +476,13 @@ function PaymentModalContent({
   const handleProcessManualPayment = () => {
     if (isSubmitting || midtransWaiting) return;
 
+    if (isCancelledOrRefunded || !isOrderPayable) {
+      toast.error(
+        `Pesanan #${order.order_number} berstatus ${currentOrderStatus} dan tidak dapat menerima pembayaran.`,
+      );
+      return;
+    }
+
     if (!order.is_finalized) {
       toast.error("Pesanan belum difinalisasi. Mohon finalisasi pesanan terlebih dahulu.");
       return;
@@ -491,6 +542,13 @@ function PaymentModalContent({
   // Eksekusi Midtrans Snap Sandbox (F2.2 & TAHAP 3)
   const handleOpenMidtransSnap = () => {
     if (isSubmitting || midtransWaiting) return;
+
+    if (isCancelledOrRefunded || !isOrderPayable) {
+      toast.error(
+        `Pesanan #${order.order_number} berstatus ${currentOrderStatus} dan tidak dapat membuat pembayaran baru.`,
+      );
+      return;
+    }
 
     if (!order.is_finalized) {
       toast.error("Pesanan belum difinalisasi.");
@@ -610,6 +668,13 @@ function PaymentModalContent({
   const handleRetryExpiredMidtransSnap = () => {
     if (isSubmitting || isVerifyingMidtrans || isCancellingMidtrans) return;
 
+    if (isCancelledOrRefunded || !isOrderPayable) {
+      toast.error(
+        `Pesanan #${order.order_number} berstatus ${currentOrderStatus} dan tidak dapat membuat token baru.`,
+      );
+      return;
+    }
+
     startTransition(async () => {
       let itemAllocationsPayload:
         | Array<{
@@ -695,8 +760,35 @@ function PaymentModalContent({
 
         setActiveSnapToken(res.data.activeSnapToken ?? null);
 
-        // SYARAT MUTLAK: onPaymentSuccess hanya dipanggil jika DATABASE sudah benar-benar berstatus "paid"
-        if (res.data.isSettled && res.data.paymentStatus === "paid") {
+        const responseCancelledOrRefunded = isOrderCancelledOrRefunded({
+          status: res.data.status,
+          payment_status: res.data.paymentStatus,
+        });
+        const responseReceiptAllowed =
+          !responseCancelledOrRefunded &&
+          canShowReceiptForOrder({
+            status: res.data.status,
+            payment_status: res.data.paymentStatus,
+            paid_total: res.data.paidTotal,
+          });
+
+        if (responseCancelledOrRefunded) {
+          setMidtransWaiting(false);
+          setActiveSnapToken(null);
+          toast.error(
+            res.data.reconciliationMessage ||
+              `Pesanan #${res.data.orderNumber} berstatus ${res.data.status} dan tidak dapat diproses atau dicetak struknya.`,
+          );
+          await refreshPaymentSummary();
+          return;
+        }
+
+        // SYARAT MUTLAK: onPaymentSuccess hanya dipanggil jika DATABASE sudah benar-benar berstatus "paid" & bukan cancelled
+        if (
+          responseReceiptAllowed &&
+          res.data.isSettled &&
+          res.data.paymentStatus === "paid"
+        ) {
           toast.success(
             `Pesanan #${res.data.orderNumber} LUNAS terverifikasi di Midtrans!`,
           );
@@ -713,10 +805,11 @@ function PaymentModalContent({
           onRefreshIdempotencyKey();
           toast.info(
             res.data.reconciliationMessage ||
-              "Reservasi Midtrans telah dilepas. Silakan bayar dengan Tunai atau buat transaksi Midtrans Snap baru.",
+              "Reservasi Midtrans telah dilepas. Silakan bayar dengan Tunai, buat transaksi Midtrans baru, atau batalkan pesanan.",
           );
           await refreshPaymentSummary();
         } else if (
+          responseReceiptAllowed &&
           res.data.paidTotal > (order.paid_total || 0) &&
           res.data.paymentStatus === "paid"
         ) {
@@ -740,37 +833,49 @@ function PaymentModalContent({
     }
   };
 
-  // Pembatalan aman reservasi Midtrans (wajib cek status aktual Midtrans dulu di server)
-  const handleCancelMidtransReservation = async () => {
+  // Pembatalan aman reservasi Midtrans (wajib cek status aktual Midtrans dulu di server).
+  // TIDAK PERNAH memicu pembayaran tunai, onPaymentSuccess, atau membuka struk.
+  const handleCancelMidtransReservation = async (
+    mode: "cancel_order" | "release_to_cash" | "official_pending_cancel" = "cancel_order",
+  ) => {
     if (isCancellingMidtrans || isVerifyingMidtrans || midtransWaiting) return;
     setIsCancellingMidtrans(true);
     try {
-      const res = await cancelActiveMidtransReservationAction(order.id);
+      const res = await cancelActiveMidtransReservationAction(order.id, { mode });
       setIsCancellingMidtrans(false);
 
       if (!res.ok) {
-        toast.error(res.message);
+        if (res.errorCode === "PENDING_GATEWAY") {
+          setPendingGatewayNotice({
+            message: res.message,
+            midtransOrderIds: res.meta?.pendingMidtransOrderIds ?? [],
+          });
+          toast.warning(res.message);
+        } else {
+          toast.error(res.message);
+        }
         void refreshPaymentSummary();
         return;
       }
 
+      setPendingGatewayNotice(null);
+
       if (res.data?.wasAlreadySettled) {
         toast.info(res.message);
-        if (res.data.isSettled) {
-          const refreshed = await getOrderPaymentSummaryAction(order.id);
-          if (refreshed.ok && refreshed.data?.paymentStatus === "paid") {
-            onPaymentSuccess(order.id, true);
-            return;
-          }
-        }
         await refreshPaymentSummary();
         return;
       }
 
       setActiveSnapToken(null);
-      onRefreshIdempotencyKey();
+      setMidtransWaiting(false);
+      if (!res.data?.orderCancelled) {
+        onRefreshIdempotencyKey();
+      }
       toast.success(res.message);
       await refreshPaymentSummary();
+      if (res.data?.orderCancelled) {
+        onOrderCancelled?.(order.id);
+      }
     } catch {
       setIsCancellingMidtrans(false);
       toast.error("Gagal membatalkan reservasi Midtrans. Silakan coba lagi.");
@@ -812,6 +917,28 @@ function PaymentModalContent({
 
       {/* Main Content */}
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-5 sm:px-6 py-5 space-y-5 text-xs">
+        {/* Banner jika pesanan dibatalkan atau direfund */}
+        {isCancelledOrRefunded && (
+          <div className="rounded-2xl border border-destructive/35 bg-destructive/10 p-4 space-y-2 text-destructive">
+            <div className="flex items-start gap-2.5">
+              <Ban className="size-4.5 shrink-0 mt-0.5" />
+              <div className="space-y-1 min-w-0">
+                <p className="font-bold text-xs sm:text-sm">
+                  {currentOrderStatus === "refunded"
+                    ? "Pesanan Telah Direfund Penuh"
+                    : "Pesanan Telah Dibatalkan"}
+                </p>
+                <p className="text-xs leading-relaxed text-destructive/90">
+                  Pesanan #{order.order_number} berstatus{" "}
+                  <strong>{currentOrderStatus}</strong>. Pembayaran Tunai, pembayaran
+                  Midtrans baru, maupun pencetakan struk tidak lagi tersedia untuk
+                  pesanan ini.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Banner jika pesanan ternyata sudah lunas di database */}
         {isAlreadySettledInDb && (
           <div className="rounded-2xl border border-emerald-500/35 bg-emerald-500/10 p-4 space-y-3 text-emerald-950 dark:text-emerald-100">
@@ -846,7 +973,7 @@ function PaymentModalContent({
         )}
 
         {/* Banner Status Reservasi Gateway Midtrans (tampil jelas di Tab Tunai maupun Midtrans) */}
-        {!isAlreadySettledInDb && reservedAmount > 0 && (
+        {!isCancelledOrRefunded && !isAlreadySettledInDb && reservedAmount > 0 && (
           <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 space-y-3 text-amber-950 dark:text-amber-100">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div className="flex items-start gap-2.5 min-w-0">
@@ -912,13 +1039,13 @@ function PaymentModalContent({
                   size="sm"
                   variant="destructive"
                   disabled={isCancellingMidtrans || isVerifyingMidtrans || isSubmitting || midtransWaiting}
-                  onClick={handleCancelMidtransReservation}
+                  onClick={() => void handleCancelMidtransReservation("cancel_order")}
                   className="h-9 px-3.5 text-xs font-semibold gap-1.5 rounded-xl"
                 >
                   {isCancellingMidtrans ? (
                     <>
                       <Loader2 className="size-3.5 animate-spin shrink-0" />
-                      <span>Membatalkan Reservasi...</span>
+                      <span>Memverifikasi Midtrans...</span>
                     </>
                   ) : (
                     <>
@@ -928,12 +1055,61 @@ function PaymentModalContent({
                   )}
                 </Button>
               )}
+
+              {(activeMidtransTx?.canCancel ?? true) &&
+                activeMidtransTx?.lifecycleStatus !== "pending" && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={isCancellingMidtrans || isVerifyingMidtrans || isSubmitting || midtransWaiting}
+                    onClick={() => void handleCancelMidtransReservation("release_to_cash")}
+                    className="h-9 px-3.5 text-xs font-semibold gap-1.5 rounded-xl border-border/80 bg-card hover:bg-muted"
+                  >
+                    <Banknote className="size-3.5 shrink-0" />
+                    <span>Lepas &amp; Ganti ke Tunai</span>
+                  </Button>
+                )}
             </div>
+
+            {(pendingGatewayNotice || activeMidtransTx?.lifecycleStatus === "pending") && (
+              <div className="rounded-xl border border-amber-600/35 bg-card/90 p-3 space-y-2.5 text-xs">
+                <div className="flex items-start gap-2 text-amber-950 dark:text-amber-100">
+                  <AlertCircle className="size-4 shrink-0 mt-0.5 text-amber-600" />
+                  <div className="space-y-1 min-w-0">
+                    <p className="font-bold">
+                      Transaksi Masih PENDING di Gateway Midtrans
+                    </p>
+                    <p className="leading-relaxed text-muted-foreground">
+                      {pendingGatewayNotice?.message ||
+                        "Pembayaran masih menunggu penyelesaian pelanggan dan tidak dianggap batal. Anda dapat menunggu pelanggan menyelesaikan pembayaran atau membatalkan resmi ke Midtrans apabila pelanggan benar-benar membatalkan transaksi."}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="destructive"
+                    disabled={isCancellingMidtrans || isVerifyingMidtrans || isSubmitting || midtransWaiting}
+                    onClick={() =>
+                      void handleCancelMidtransReservation("official_pending_cancel")
+                    }
+                    className="h-8 px-3 text-xs font-semibold gap-1.5 rounded-lg"
+                  >
+                    <XCircle className="size-3.5 shrink-0" />
+                    <span>Batalkan Resmi di Midtrans</span>
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Mode Split Bill Selector */}
-        <div className="rounded-2xl border border-border/80 bg-muted/15 p-4 space-y-3.5">
+        {isOrderPayable && !isAlreadySettledInDb && !isCancelledOrRefunded && (
+          <>
+            {/* Mode Split Bill Selector */}
+            <div className="rounded-2xl border border-border/80 bg-muted/15 p-4 space-y-3.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <Label className="text-xs font-bold flex items-center gap-2 text-foreground">
               <Split className="size-3.5 text-primary shrink-0" />
@@ -1304,11 +1480,11 @@ function PaymentModalContent({
                       size="default"
                       variant="outline"
                       disabled={isCancellingMidtrans || isVerifyingMidtrans || isSubmitting || midtransWaiting}
-                      onClick={handleCancelMidtransReservation}
+                      onClick={() => void handleCancelMidtransReservation("cancel_order")}
                       className="h-10 px-3.5 text-xs font-semibold gap-2 border-destructive/40 text-destructive hover:bg-destructive/10 rounded-xl"
                     >
                       <XCircle className="size-3.5 shrink-0" />
-                      <span>{isCancellingMidtrans ? "Membatalkan..." : "Batalkan"}</span>
+                      <span>{isCancellingMidtrans ? "Memproses..." : "Batalkan"}</span>
                     </Button>
                   </div>
                 </div>
@@ -1369,13 +1545,13 @@ function PaymentModalContent({
                     <Button
                       type="button"
                       size="default"
-                      variant="destructive"
+                      variant="outline"
                       disabled={isCancellingMidtrans || isVerifyingMidtrans || isSubmitting}
-                      onClick={handleCancelMidtransReservation}
-                      className="h-10 px-3 text-xs font-semibold gap-2 rounded-xl"
+                      onClick={() => void handleCancelMidtransReservation("release_to_cash")}
+                      className="h-10 px-3 text-xs font-semibold gap-2 border-amber-600/40 text-amber-800 hover:bg-amber-500/10 rounded-xl"
                     >
-                      <XCircle className="size-3.5 shrink-0" />
-                      <span>{isCancellingMidtrans ? "Membatalkan..." : "Batalkan Reservasi"}</span>
+                      <Banknote className="size-3.5 shrink-0" />
+                      <span>{isCancellingMidtrans ? "Melepas..." : "Lepas ke Tunai"}</span>
                     </Button>
                   </div>
                 </div>
@@ -1406,22 +1582,47 @@ function PaymentModalContent({
             className="h-10 text-xs sm:text-sm rounded-xl bg-card"
           />
         </div>
+          </>
+        )}
       </div>
 
       {/* Footer */}
       <DialogFooter className="mx-0 mb-0 px-5 sm:px-6 py-4 border-t bg-muted/25 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 shrink-0 rounded-b-2xl">
-        <Button
-          type="button"
-          variant="outline"
-          size="default"
-          disabled={isSubmitting || isCancellingMidtrans || midtransWaiting}
-          onClick={onClose}
-          className="h-11 px-5 text-xs sm:text-sm font-semibold rounded-xl border-border/80 bg-card hover:bg-muted w-full sm:w-auto"
-        >
-          {isAlreadySettledInDb ? "Tutup" : "Batal"}
-        </Button>
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full sm:w-auto">
+          <Button
+            type="button"
+            variant="outline"
+            size="default"
+            disabled={isSubmitting || isCancellingMidtrans || midtransWaiting}
+            onClick={onClose}
+            className="h-11 px-5 text-xs sm:text-sm font-semibold rounded-xl border-border/80 bg-card hover:bg-muted w-full sm:w-auto"
+          >
+            Tutup
+          </Button>
+          {!isAlreadySettledInDb &&
+            !isCancelledOrRefunded &&
+            canCancelCurrentOrder &&
+            onOpenCancelOrder && (
+              <Button
+                type="button"
+                variant="outline"
+                size="default"
+                disabled={
+                  isSubmitting ||
+                  isVerifyingMidtrans ||
+                  isCancellingMidtrans ||
+                  midtransWaiting
+                }
+                onClick={() => onOpenCancelOrder(order)}
+                className="h-11 px-4 text-xs sm:text-sm font-semibold rounded-xl border-destructive/30 text-destructive hover:bg-destructive/10 gap-2 w-full sm:w-auto"
+              >
+                <Ban className="size-4 shrink-0" />
+                <span>Batalkan Pesanan</span>
+              </Button>
+            )}
+        </div>
 
-        {isAlreadySettledInDb ? (
+        {isCancelledOrRefunded || (!isAlreadySettledInDb && !isOrderPayable) ? null : isAlreadySettledInDb ? (
           <Button
             type="button"
             size="default"
@@ -1465,13 +1666,13 @@ function PaymentModalContent({
               <Button
                 type="button"
                 size="default"
-                variant="destructive"
+                variant="outline"
                 disabled={isSubmitting || isVerifyingMidtrans || isCancellingMidtrans || midtransWaiting}
-                onClick={handleCancelMidtransReservation}
-                className="h-11 px-4 text-xs sm:text-sm font-semibold rounded-xl gap-2"
+                onClick={() => void handleCancelMidtransReservation("release_to_cash")}
+                className="h-11 px-4 text-xs sm:text-sm font-semibold rounded-xl gap-2 border-amber-600/40 text-amber-800 hover:bg-amber-500/10"
               >
-                <XCircle className="size-4 shrink-0" />
-                <span>{isCancellingMidtrans ? "Membatalkan..." : "Batalkan Reservasi"}</span>
+                <Banknote className="size-4 shrink-0" />
+                <span>{isCancellingMidtrans ? "Melepas..." : "Lepas ke Tunai"}</span>
               </Button>
               <Button
                 type="button"

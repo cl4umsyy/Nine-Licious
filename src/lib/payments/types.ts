@@ -45,6 +45,16 @@ export type PaymentActionResult<T = unknown> =
       ok: false;
       message: string;
       fieldErrors?: Record<string, string>;
+      errorCode?:
+        | "PENDING_GATEWAY"
+        | "GATEWAY_UNREACHABLE"
+        | "RECONCILIATION_REQUIRED"
+        | "ORDER_CANCELLED";
+      meta?: {
+        isPendingGateway?: boolean;
+        pendingMidtransOrderIds?: string[];
+        orderStatus?: string;
+      };
     };
 
 export type ProcessRefundInput = {

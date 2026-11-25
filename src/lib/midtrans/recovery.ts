@@ -24,15 +24,18 @@ export type CheckStatusResult = {
   httpStatus?: number;
 };
 
+const MIDTRANS_CORE_TIMEOUT_MS = 10_000;
+
 export type CancelTransactionResult = {
   ok: boolean;
   isCancelled?: boolean;
   status?: MidtransStatusResponse;
   error?: string;
+  httpStatus?: number;
 };
 
 /**
- * Fetches transaction status from Midtrans Core API.
+ * Fetches transaction status from Midtrans Core API with explicit timeout protection.
  */
 export async function getMidtransStatus(orderId: string): Promise<CheckStatusResult> {
   const configState = getMidtransConfigState();
@@ -49,6 +52,9 @@ export async function getMidtransStatus(orderId: string): Promise<CheckStatusRes
 
   const authHeader = `Basic ${Buffer.from(`${config.serverKey}:`).toString("base64")}`;
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), MIDTRANS_CORE_TIMEOUT_MS);
+
   try {
     const response = await fetch(`${config.apiBaseUrl}/v2/${encodeURIComponent(orderId)}/status`, {
       method: "GET",
@@ -56,9 +62,10 @@ export async function getMidtransStatus(orderId: string): Promise<CheckStatusRes
         Accept: "application/json",
         Authorization: authHeader,
       },
+      signal: controller.signal,
     });
 
-    const body: MidtransStatusResponse = await response.json();
+    const body = (await response.json().catch(() => null)) as MidtransStatusResponse | null;
     const bodyStatusCode = body?.status_code ? String(body.status_code).trim() : "";
 
     // Midtrans Core API v2 dapat mengembalikan HTTP 200 dengan body { status_code: "404" }
@@ -71,10 +78,14 @@ export async function getMidtransStatus(orderId: string): Promise<CheckStatusRes
       };
     }
 
-    if (
-      !response.ok ||
-      (bodyStatusCode && !["200", "201", "202"].includes(bodyStatusCode))
-    ) {
+    // Midtrans mengembalikan status_code "200", "201", "202", serta "407" khusus saat transaksi expire.
+    const isValidStatusCode =
+      !bodyStatusCode ||
+      ["200", "201", "202"].includes(bodyStatusCode) ||
+      (bodyStatusCode === "407" &&
+        String(body?.transaction_status || "").trim().toLowerCase() === "expire");
+
+    if (!body || !response.ok || !isValidStatusCode) {
       const parsedCode = Number.parseInt(bodyStatusCode, 10);
       const effectiveStatus =
         Number.isFinite(parsedCode) && parsedCode >= 400
@@ -97,15 +108,22 @@ export async function getMidtransStatus(orderId: string): Promise<CheckStatusRes
       httpStatus: response.status,
     };
   } catch (err: unknown) {
+    const isTimeout = err instanceof Error && err.name === "AbortError";
     return {
       ok: false,
-      error: err instanceof Error ? err.message : "Network error while checking status",
+      error: isTimeout
+        ? "Koneksi ke Midtrans Core API melebihi batas waktu (timeout)."
+        : err instanceof Error
+          ? err.message
+          : "Network error while checking status",
     };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
 /**
- * Cancels a Midtrans transaction via POST /v2/{order_id}/cancel.
+ * Cancels a Midtrans transaction via POST /v2/{order_id}/cancel with timeout protection.
  */
 export async function cancelMidtransTransaction(orderId: string): Promise<CancelTransactionResult> {
   const configState = getMidtransConfigState();
@@ -122,6 +140,9 @@ export async function cancelMidtransTransaction(orderId: string): Promise<Cancel
 
   const authHeader = `Basic ${Buffer.from(`${config.serverKey}:`).toString("base64")}`;
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), MIDTRANS_CORE_TIMEOUT_MS);
+
   try {
     const response = await fetch(`${config.apiBaseUrl}/v2/${encodeURIComponent(orderId)}/cancel`, {
       method: "POST",
@@ -130,18 +151,29 @@ export async function cancelMidtransTransaction(orderId: string): Promise<Cancel
         Accept: "application/json",
         Authorization: authHeader,
       },
+      signal: controller.signal,
     });
 
-    const body: MidtransStatusResponse = await response.json();
+    const body = (await response.json().catch(() => null)) as MidtransStatusResponse | null;
+    const bodyStatusCode = body?.status_code ? String(body.status_code).trim() : "";
 
-    if (!response.ok) {
+    if (bodyStatusCode === "404" || response.status === 404) {
       return {
         ok: false,
+        httpStatus: 404,
+        error: body?.status_message || "Transaction doesn't exist.",
+      };
+    }
+
+    if (!body || !response.ok) {
+      return {
+        ok: false,
+        httpStatus: response.status,
         error: body?.status_message || `HTTP ${response.status}`,
       };
     }
 
-    const isCancelled = body.status_code === "200" && body.transaction_status === "cancel";
+    const isCancelled = bodyStatusCode === "200" && body.transaction_status === "cancel";
 
     if (isCancelled) {
       // Perbarui status lokal di DB secara atomik dan lepas alokasi reserved
@@ -161,7 +193,7 @@ export async function cancelMidtransTransaction(orderId: string): Promise<Cancel
             updated_at: nowIso,
           })
           .eq("midtrans_order_id", orderId)
-          .in("lifecycle_status", ["initiated", "token_created", "pending"])
+          .in("lifecycle_status", ["initiated", "token_created", "pending", "reconciliation_required"])
           .select("id")
           .maybeSingle();
 
@@ -179,15 +211,26 @@ export async function cancelMidtransTransaction(orderId: string): Promise<Cancel
     }
 
     return {
-      ok: true,
+      ok: isCancelled,
       isCancelled,
       status: body,
+      httpStatus: response.status,
+      error: !isCancelled
+        ? body?.status_message || `Midtrans menolak pembatalan (status: ${body.transaction_status || bodyStatusCode}).`
+        : undefined,
     };
   } catch (err: unknown) {
+    const isTimeout = err instanceof Error && err.name === "AbortError";
     return {
       ok: false,
-      error: err instanceof Error ? err.message : "Network error while cancelling transaction",
+      error: isTimeout
+        ? "Koneksi ke Midtrans Core API melebihi batas waktu (timeout)."
+        : err instanceof Error
+          ? err.message
+          : "Network error while cancelling transaction",
     };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

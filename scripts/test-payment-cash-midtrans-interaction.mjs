@@ -872,10 +872,11 @@ runTest("18. [Contract Audit] Verifikasi kontrak kode sumber PaymentModal, Serve
     "cancelActiveMidtransReservationAction wajib memeriksa status Midtrans terlebih dahulu dan mencatat audit log",
   );
 
-  // 3. reconcile.ts melepas reservasi 404 HANYA jika payment_expires_at sudah kedaluwarsa
+  // 3. reconcile.ts melepas reservasi 404 HANYA jika payment_expires_at sudah kedaluwarsa (lintas seluruh attempt)
   assert.ok(
     reconcileSrc.includes("isMidtransTransactionExpired") &&
-      reconcileSrc.includes("latestMidtransTx.payment_expires_at"),
+      (reconcileSrc.includes("tx.payment_expires_at") ||
+        reconcileSrc.includes("latestMidtransTx.payment_expires_at")),
     "reconcile.ts harus memeriksa isMidtransTransactionExpired sebelum melepas transaksi HTTP 404",
   );
   assert.ok(
@@ -885,7 +886,8 @@ runTest("18. [Contract Audit] Verifikasi kontrak kode sumber PaymentModal, Serve
 
   // 4. recovery.ts mengupdate lifecycle secara kondisional & membersihkan signature_key
   assert.ok(
-    recoverySrc.includes('.in("lifecycle_status", ["initiated", "token_created", "pending"])'),
+    recoverySrc.includes('.in("lifecycle_status", ["initiated", "token_created", "pending"') &&
+      !recoverySrc.includes('.in("lifecycle_status", ["initiated", "token_created", "pending", "settled"]'),
     "recovery.ts harus memperbarui lifecycle_status secara kondisional agar tidak menimpa settled",
   );
   assert.ok(
