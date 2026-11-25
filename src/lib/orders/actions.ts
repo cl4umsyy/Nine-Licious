@@ -28,6 +28,7 @@ import {
 import { verifyAndReleaseGatewayBeforeOrderCancel } from "@/lib/midtrans/reconcile";
 import { validateOrderInventoryAvailability } from "@/lib/orders/inventory-validation";
 import { canCancelOrder } from "@/lib/orders/status-rules";
+import { requireActiveShiftForPosOrder } from "@/lib/shifts/guard";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import type {
@@ -165,6 +166,20 @@ export async function createPosOrderAction(
   }
 
   const input = parsed.data;
+
+  // 1b. Wajib Shift Kasir Aktif (status = 'open') & validasi kepemilikan shift_id
+  const shiftCheck = await requireActiveShiftForPosOrder(
+    context.supabase,
+    context.actor.user.id,
+    rawInput,
+  );
+  if (!shiftCheck.ok) {
+    return {
+      ok: false,
+      errorCode: shiftCheck.errorCode,
+      message: shiftCheck.message,
+    };
+  }
 
   // H-2: Jika ada existingOrderId, delegasikan langsung ke penambahan item
   if (input.existingOrderId) {
@@ -670,6 +685,11 @@ export async function createPosOrderAction(
     } else {
       return {
         ok: false,
+        ...(rpcError?.message?.includes("SHIFT_NOT_OPEN")
+          ? { errorCode: "SHIFT_NOT_OPEN" }
+          : rpcError?.message?.includes("SHIFT_OWNERSHIP_MISMATCH")
+            ? { errorCode: "SHIFT_OWNERSHIP_MISMATCH" }
+            : {}),
         message: rpcError?.message || "Gagal menyimpan pesanan.",
       };
     }
@@ -689,6 +709,7 @@ export async function createPosOrderAction(
       table_name: tableNameSnapshot,
       grand_total: totals.grandTotal,
       item_count: cartItems.length,
+      shift_id: shiftCheck.shiftId,
       status: "awaiting_payment",
     },
   });
@@ -730,6 +751,20 @@ export async function appendOrderItemsAction(
   }
 
   const input = parsed.data;
+
+  // 0. Wajib Shift Kasir Aktif (status = 'open') & validasi kepemilikan shift_id
+  const shiftCheck = await requireActiveShiftForPosOrder(
+    context.supabase,
+    context.actor.user.id,
+    rawInput,
+  );
+  if (!shiftCheck.ok) {
+    return {
+      ok: false,
+      errorCode: shiftCheck.errorCode,
+      message: shiftCheck.message,
+    };
+  }
 
   // 1. Ambil & validasi pesanan target
   const { data: existingOrder, error: orderError } = await context.supabase
@@ -996,6 +1031,11 @@ export async function appendOrderItemsAction(
     } else {
       return {
         ok: false,
+        ...(rpcError.message?.includes("SHIFT_NOT_OPEN")
+          ? { errorCode: "SHIFT_NOT_OPEN" }
+          : rpcError.message?.includes("SHIFT_OWNERSHIP_MISMATCH")
+            ? { errorCode: "SHIFT_OWNERSHIP_MISMATCH" }
+            : {}),
         message: rpcError.message || "Gagal menambahkan item ke pesanan.",
       };
     }
@@ -1014,6 +1054,7 @@ export async function appendOrderItemsAction(
       subtotal_delta: subtotalDelta,
       grand_total_delta: grandTotalDelta,
       new_grand_total: existingOrder.grand_total + grandTotalDelta,
+      shift_id: shiftCheck.shiftId,
     },
   });
 

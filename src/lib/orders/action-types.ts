@@ -10,6 +10,7 @@ export type OrderActionState = {
 export type OrderActionResult = {
   ok: boolean;
   message?: string;
+  errorCode?: string;
   fieldErrors?: Record<string, string>;
   data?: OrderWithDetails;
 };

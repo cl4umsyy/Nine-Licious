@@ -43,6 +43,10 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { isMissingServingSchemaError } from "@/lib/orders/serving";
 import {
+  extractSuppliedShiftId,
+  requireActiveShiftForPosOrder,
+} from "@/lib/shifts/guard";
+import {
   canCancelOrder,
   canPayOrder,
   canShowReceiptForOrder,
@@ -133,6 +137,26 @@ export async function processPosManualPaymentAction(
   const supabase = await createSupabaseServerClient();
   if (!supabase) {
     return { ok: false, message: "Klien database tidak tersedia." };
+  }
+
+  // 3b. Pembayaran Tunai wajib shift aktif; tolak shift_id palsu jika dikirim browser
+  const isCashPayment =
+    input.paymentMethod === "cash" || input.paymentSource === "cash";
+  if (isCashPayment || extractSuppliedShiftId(rawInput).present) {
+    const shiftCheck = await requireActiveShiftForPosOrder(
+      supabase,
+      cashierActor.session.profile.id,
+      rawInput,
+    );
+    if (!shiftCheck.ok) {
+      return {
+        ok: false,
+        message:
+          shiftCheck.errorCode === "SHIFT_OWNERSHIP_MISMATCH"
+            ? shiftCheck.message
+            : "Pembayaran tunai ditolak: shift kasir belum dibuka atau sudah ditutup. Buka shift terlebih dahulu.",
+      };
+    }
   }
 
   // 4. Validasi Pra-kondisi di Server Side (Jangan Percayai Browser Input)

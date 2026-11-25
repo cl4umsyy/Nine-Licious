@@ -63,6 +63,7 @@ export function PosContainer({
   activeShift = null,
 }: PosContainerProps) {
   const router = useRouter();
+  const hasActiveShift = Boolean(activeShift && activeShift.status === "open");
   const [tableStatusOverrides, setTableStatusOverrides] = useState<
     Record<string, TableStatus>
   >({});
@@ -182,6 +183,13 @@ export function PosContainer({
 
   // Handle selecting a product from catalog
   const handleSelectProduct = (product: ProductWithModifiers) => {
+    if (!hasActiveShift) {
+      toast.error(
+        "Shift kasir belum dibuka. Buka shift terlebih dahulu sebelum memilih produk dan membuat pesanan.",
+      );
+      return;
+    }
+
     if (product.isStockAvailable === false) {
       toast.error(
         product.stockUnavailableReason ||
@@ -201,6 +209,12 @@ export function PosContainer({
   };
 
   const handleAddDirectProduct = (product: ProductWithModifiers) => {
+    if (!hasActiveShift) {
+      toast.error(
+        "Shift kasir belum dibuka. Buka shift terlebih dahulu sebelum membuat pesanan.",
+      );
+      return;
+    }
     handleCartModification();
     setCart((prev) => {
       const existingIndex = prev.findIndex(
@@ -235,6 +249,12 @@ export function PosContainer({
   };
 
   const handleAddToCart = (item: CartItem) => {
+    if (!hasActiveShift) {
+      toast.error(
+        "Shift kasir belum dibuka. Buka shift terlebih dahulu sebelum membuat pesanan.",
+      );
+      return;
+    }
     handleCartModification();
     setCart((prev) => [...prev, item]);
     toast.success(`Ditambahkan: ${item.productName}`);
@@ -307,6 +327,13 @@ export function PosContainer({
   const handleSubmitOrder = () => {
     if (cart.length === 0 || isSubmitting) return;
 
+    if (!hasActiveShift) {
+      toast.error(
+        "Shift kasir belum dibuka atau sudah ditutup. Buka shift terlebih dahulu sebelum membuat pesanan.",
+      );
+      return;
+    }
+
     if (orderType === "dine_in" && !selectedTable) {
       toast.error("Pilih meja terlebih dahulu untuk pesanan Dine-in.");
       setIsTableModalOpen(true);
@@ -370,6 +397,9 @@ export function PosContainer({
         }
       } else {
         toast.error(result.message || "Gagal menyimpan pesanan.");
+        if (result.errorCode === "SHIFT_NOT_OPEN") {
+          router.refresh();
+        }
       }
     });
   };
@@ -426,6 +456,7 @@ export function PosContainer({
             products={products}
             categories={categories}
             onSelectProduct={handleSelectProduct}
+            disabledByShift={!hasActiveShift}
           />
         </div>
 
@@ -444,6 +475,7 @@ export function PosContainer({
             customerName={customerName}
             orderNotes={orderNotes}
             isSubmitting={isSubmitting}
+            hasActiveShift={hasActiveShift}
             totals={totals}
             selectedOrderPromoName={selectedOrderPromo?.name}
             hasManualDiscount={manualDiscount !== null}

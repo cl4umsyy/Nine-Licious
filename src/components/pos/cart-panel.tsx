@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import {
   ChevronRight,
   FileText,
@@ -13,6 +14,7 @@ import {
   Trash2,
   User,
   UtensilsCrossed,
+  Wallet,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -33,6 +35,7 @@ export type CartPanelProps = {
   customerName: string;
   orderNotes: string;
   isSubmitting: boolean;
+  hasActiveShift?: boolean;
   totals: CartCalculationWithDiscounts;
   selectedOrderPromoName?: string | null;
   hasManualDiscount?: boolean;
@@ -55,6 +58,7 @@ export function CartPanel({
   customerName,
   orderNotes,
   isSubmitting,
+  hasActiveShift = true,
   totals,
   selectedOrderPromoName,
   hasManualDiscount,
@@ -70,7 +74,10 @@ export function CartPanel({
 }: CartPanelProps) {
   const isDineIn = orderType === "dine_in";
   const canSubmit =
-    cart.length > 0 && (!isDineIn || selectedTable !== null) && !isSubmitting;
+    hasActiveShift &&
+    cart.length > 0 &&
+    (!isDineIn || selectedTable !== null) &&
+    !isSubmitting;
 
   return (
     <Card className="flex flex-col w-full border-border/80 shadow-sm overflow-hidden bg-card rounded-2xl py-0 gap-0">
@@ -435,15 +442,33 @@ export function CartPanel({
           </div>
         </div>
 
+        {/* Shift Closed Notice */}
+        {!hasActiveShift && (
+          <div className="w-full rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-950 dark:text-amber-100 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <Wallet className="size-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+              <span className="font-medium leading-snug">
+                Shift belum dibuka. Buka shift dahulu untuk membuat pesanan.
+              </span>
+            </div>
+            <Link
+              href="/pos/shift"
+              className="font-bold text-amber-700 dark:text-amber-300 underline underline-offset-2 shrink-0"
+            >
+              Buka Shift
+            </Link>
+          </div>
+        )}
+
         {/* Warning if Dine-in without Table */}
-        {isDineIn && !selectedTable && cart.length > 0 && (
+        {hasActiveShift && isDineIn && !selectedTable && cart.length > 0 && (
           <p className="w-full text-[11px] text-amber-700 dark:text-amber-300 font-medium text-center bg-amber-50/70 dark:bg-amber-950/30 px-2.5 py-1.5 rounded-xl border border-amber-500/25">
             Pilih meja terlebih dahulu untuk menyelesaikan pesanan Dine-in.
           </p>
         )}
 
         {/* Action Buttons: Reset & Buat Pesanan — always visible */}
-        <div className="w-full flex items-center gap-2.5">
+        <div className="sticky bottom-0 w-full flex items-center gap-2.5 bg-card pt-0.5">
           {cart.length > 0 && (
             <Button
               type="button"
@@ -470,6 +495,8 @@ export function CartPanel({
                 <LoaderCircle className="size-4 mr-2 animate-spin" />
                 {activeOrderNumber ? "Menambahkan Item..." : "Menyimpan Pesanan..."}
               </>
+            ) : !hasActiveShift ? (
+              "Buka Shift Terlebih Dahulu"
             ) : activeOrderNumber ? (
               `Tambah ke #${activeOrderNumber} (+${formatRupiah(totals.grandTotal)})`
             ) : isDineIn && selectedTable?.status === "occupied" ? (

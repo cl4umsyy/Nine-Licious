@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react";
 import Image from "next/image";
-import { Search, Sparkles, Utensils, X } from "lucide-react";
+import Link from "next/link";
+import { Search, Sparkles, Utensils, Wallet, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,12 +15,14 @@ export type ProductCatalogProps = {
   products: ProductWithModifiers[];
   categories: MenuCategory[];
   onSelectProduct: (product: ProductWithModifiers) => void;
+  disabledByShift?: boolean;
 };
 
 export function ProductCatalog({
   products,
   categories,
   onSelectProduct,
+  disabledByShift = false,
 }: ProductCatalogProps) {
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(
     null,
@@ -119,7 +122,25 @@ export function ProductCatalog({
       </div>
 
       {/* Product Grid */}
-      <div className="w-full">
+      <div className="w-full space-y-3">
+        {disabledByShift && (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3.5 py-2.5 text-xs text-amber-950 dark:text-amber-100">
+            <div className="flex items-center gap-2">
+              <Wallet className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              <span className="font-medium">
+                Pemilihan menu dikunci sampai shift kasir dibuka. Silakan buka shift terlebih dahulu.
+              </span>
+            </div>
+            <Button
+              asChild
+              size="sm"
+              className="h-7 px-3 text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white rounded-lg shrink-0"
+            >
+              <Link href="/pos/shift">Buka Shift</Link>
+            </Button>
+          </div>
+        )}
+
         {filteredProducts.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-12 text-center rounded-2xl border border-dashed bg-card/40 text-muted-foreground space-y-2 mt-4">
             <Utensils className="size-8 text-muted-foreground/60" />
@@ -146,24 +167,29 @@ export function ProductCatalog({
             {filteredProducts.map((product, idx) => {
               const isStockDepleted = product.isStockAvailable === false;
               const isAvailable = product.is_available && !isStockDepleted;
+              const isClickable = isAvailable && !disabledByShift;
               const hasModifiers = product.modifierGroups.length > 0;
 
               return (
                 <button
                   key={product.id}
                   type="button"
-                  disabled={!isAvailable}
+                  disabled={!isClickable}
                   onClick={() => onSelectProduct(product)}
                   title={
-                    product.stockUnavailableReason ||
-                    (!product.is_available
-                      ? "Produk sedang tidak tersedia"
-                      : undefined)
+                    disabledByShift
+                      ? "Buka shift kasir terlebih dahulu sebelum memilih produk"
+                      : product.stockUnavailableReason ||
+                        (!product.is_available
+                          ? "Produk sedang tidak tersedia"
+                          : undefined)
                   }
                   className={`group relative flex flex-col overflow-hidden rounded-2xl border border-border/75 text-left bg-card shadow-2xs transition-all ${
-                    isAvailable
+                    isClickable
                       ? "hover:border-primary/50 hover:shadow-md cursor-pointer active:scale-[0.985]"
-                      : "cursor-not-allowed"
+                      : isAvailable && disabledByShift
+                        ? "opacity-75 cursor-not-allowed"
+                        : "cursor-not-allowed"
                   }`}
                 >
                   {/* Photo Container */}

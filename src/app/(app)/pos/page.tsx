@@ -286,7 +286,7 @@ export default async function PosPage() {
             <div>
               <AlertTitle className="text-xs font-bold">Shift Kasir Belum Dibuka</AlertTitle>
               <AlertDescription className="text-[11px] text-amber-900/90 dark:text-amber-200/90">
-                Anda belum membuka shift kasir. Pembayaran tunai mewajibkan shift aktif dengan modal kas awal.
+                Anda belum membuka shift kasir. Buka shift terlebih dahulu sebelum memilih produk, membuat pesanan, atau memproses pembayaran tunai.
               </AlertDescription>
             </div>
             <Button asChild size="sm" className="h-7.5 px-3 text-xs font-bold shrink-0 bg-amber-600 hover:bg-amber-700 text-white rounded-lg">

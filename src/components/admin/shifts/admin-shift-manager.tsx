@@ -3,6 +3,7 @@
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
+  AlertCircle,
   ArrowDownCircle,
   ArrowUpCircle,
   CheckCircle2,
@@ -12,6 +13,7 @@ import {
   Filter,
   History,
   Loader2,
+  Lock,
   PlusCircle,
   Receipt,
   Search,
@@ -57,6 +59,7 @@ import {
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  closeShiftAction,
   getCashMovementsAction,
   getShiftSummaryAction,
   openShiftAction,
@@ -145,6 +148,11 @@ export function AdminShiftManager({
   const [selectedShiftSummary, setSelectedShiftSummary] = useState<ShiftSummary | null>(null);
   const [shiftMovements, setShiftMovements] = useState<CashMovement[]>([]);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
+
+  // Modal Tutup Shift Kasir oleh Admin
+  const [shiftToClose, setShiftToClose] = useState<ShiftWithCashier | null>(null);
+  const [actualCashInput, setActualCashInput] = useState<number>(0);
+  const [closingNotes, setClosingNotes] = useState<string>("");
 
   const [isPending, startTransition] = useTransition();
 
@@ -255,6 +263,50 @@ export function AdminShiftManager({
       }
     });
   };
+
+  // Handler Tutup Shift Kasir oleh Admin
+  const handleOpenCloseShiftModal = (shift: ShiftWithCashier) => {
+    setShiftToClose(shift);
+    setActualCashInput(shift.expected_cash ?? 0);
+    setClosingNotes("");
+  };
+
+  const handleCloseShiftByAdmin = () => {
+    if (!shiftToClose) return;
+
+    if (actualCashInput < 0) {
+      toast.error("Nominal uang fisik tidak boleh bernilai negatif.");
+      return;
+    }
+
+    const difference = actualCashInput - (shiftToClose.expected_cash ?? 0);
+    if (difference !== 0 && (!closingNotes || closingNotes.trim().length < 3)) {
+      toast.error(
+        "Terdapat selisih kas fisik. Catatan rekonsiliasi wajib diisi minimal 3 karakter.",
+      );
+      return;
+    }
+
+    startTransition(async () => {
+      const res = await closeShiftAction({
+        shiftId: shiftToClose.id,
+        actualCash: actualCashInput,
+        notes: closingNotes.trim() || null,
+      });
+
+      if (res.ok && res.data) {
+        toast.success(res.message);
+        setShiftToClose(null);
+        router.refresh();
+      } else {
+        toast.error(res.message || "Gagal menutup shift kasir.");
+      }
+    });
+  };
+
+  const adminCloseDifference = shiftToClose
+    ? actualCashInput - (shiftToClose.expected_cash ?? 0)
+    : 0;
 
   // Handler Lihat Detail Mutasi Kas & Audit Rekonsiliasi Shift
   const handleViewDetail = async (shift: ShiftWithCashier) => {
@@ -465,15 +517,26 @@ export function AdminShiftManager({
                         {shift.notes || "-"}
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleViewDetail(shift)}
-                          className="h-8 px-2.5 text-xs font-semibold rounded-lg gap-1.5"
-                        >
-                          <Eye className="size-3.5" />
-                          <span>Detail &amp; Mutasi</span>
-                        </Button>
+                        <div className="inline-flex items-center justify-end gap-1.5">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleViewDetail(shift)}
+                            className="h-8 px-2.5 text-xs font-semibold rounded-lg gap-1.5"
+                          >
+                            <Eye className="size-3.5" />
+                            <span>Detail &amp; Mutasi</span>
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => handleOpenCloseShiftModal(shift)}
+                            className="h-8 px-2.5 text-xs font-semibold rounded-lg gap-1.5"
+                          >
+                            <Lock className="size-3.5" />
+                            <span>Tutup Shift</span>
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -1078,6 +1141,144 @@ export function AdminShiftManager({
               className="rounded-xl text-xs font-semibold"
             >
               Tutup
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ========================================================================= */}
+      {/* DIALOG 3: TUTUP SHIFT KASIR OLEH ADMIN & REKONSILIASI */}
+      {/* ========================================================================= */}
+      <Dialog
+        open={shiftToClose !== null}
+        onOpenChange={(open) => {
+          if (!open && !isPending) setShiftToClose(null);
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold flex items-center gap-2">
+              <Lock className="size-5 text-destructive" />
+              Tutup Shift Kasir (Admin)
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Menutup shift aktif milik{" "}
+              <strong>{shiftToClose?.cashier?.full_name || "Kasir"}</strong> (@
+              {shiftToClose?.cashier?.username || "-"}) dan mencatat hasil rekonsiliasi kas.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="p-4 rounded-xl border bg-muted/30 flex items-center justify-between">
+              <div>
+                <span className="text-xs text-muted-foreground block">
+                  Expected Cash (Sistem)
+                </span>
+                <span className="text-xl font-mono font-extrabold text-foreground">
+                  {formatRupiah(shiftToClose?.expected_cash ?? 0)}
+                </span>
+              </div>
+              <Badge variant="outline" className="text-xs font-mono">
+                Modal: {formatRupiah(shiftToClose?.opening_cash ?? 0)}
+              </Badge>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="admin-actual-cash-input" className="text-xs font-semibold">
+                Uang Fisik Aktual (Rp)
+              </Label>
+              <div className="relative">
+                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-muted-foreground">
+                  Rp
+                </span>
+                <Input
+                  id="admin-actual-cash-input"
+                  type="number"
+                  min={0}
+                  value={actualCashInput}
+                  onChange={(e) =>
+                    setActualCashInput(parseInt(e.target.value, 10) || 0)
+                  }
+                  className="pl-10 text-base font-mono font-bold h-11 rounded-xl"
+                />
+              </div>
+            </div>
+
+            <div
+              className={`p-3.5 rounded-xl border flex items-center justify-between text-xs font-medium ${
+                adminCloseDifference === 0
+                  ? "border-emerald-500/40 bg-emerald-50 text-emerald-900"
+                  : adminCloseDifference > 0
+                    ? "border-blue-500/40 bg-blue-50 text-blue-900"
+                    : "border-rose-500/40 bg-rose-50 text-rose-900"
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                {adminCloseDifference === 0 ? (
+                  <CheckCircle2 className="size-4 text-emerald-600" />
+                ) : (
+                  <AlertCircle className="size-4 text-rose-600" />
+                )}
+                <span>
+                  {adminCloseDifference === 0
+                    ? "Kas Fisik Cocok Sempurna (Tidak Ada Selisih)"
+                    : adminCloseDifference > 0
+                      ? "Selisih Lebih (Surplus)"
+                      : "Selisih Kurang (Defisit)"}
+                </span>
+              </div>
+              <span className="font-mono font-bold text-sm">
+                {adminCloseDifference === 0
+                  ? "Rp 0"
+                  : adminCloseDifference > 0
+                    ? `+${formatRupiah(adminCloseDifference)}`
+                    : `-${formatRupiah(Math.abs(adminCloseDifference))}`}
+              </span>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="admin-closing-notes" className="text-xs font-semibold">
+                Catatan Penutupan{" "}
+                {adminCloseDifference !== 0 && (
+                  <span className="text-destructive">* (Wajib bila ada selisih)</span>
+                )}
+              </Label>
+              <Textarea
+                id="admin-closing-notes"
+                rows={2}
+                placeholder={
+                  adminCloseDifference !== 0
+                    ? "Jelaskan penyebab selisih kas..."
+                    : "Catatan penutupan shift oleh admin (opsional)..."
+                }
+                value={closingNotes}
+                onChange={(e) => setClosingNotes(e.target.value)}
+                className="text-xs rounded-xl"
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isPending}
+              onClick={() => setShiftToClose(null)}
+              className="rounded-xl text-xs"
+            >
+              Batal
+            </Button>
+            <Button
+              type="button"
+              disabled={
+                isPending ||
+                actualCashInput < 0 ||
+                (adminCloseDifference !== 0 && closingNotes.trim().length < 3)
+              }
+              onClick={handleCloseShiftByAdmin}
+              className="rounded-xl text-xs font-bold bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isPending ? "Menutup Shift..." : "Konfirmasi Tutup Shift"}
             </Button>
           </DialogFooter>
         </DialogContent>

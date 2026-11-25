@@ -20,6 +20,7 @@ const db = {
   ingredient_reservations: [],
   payments: [],
   refunds: [],
+  shifts: [],
   audit_logs: [],
   restaurant_settings: [{ id: 1, name: "Nine Licious", receipt_width: 58 }],
   profiles: [{ id: "user-kasir-1", full_name: "Kasir Satu" }],
@@ -47,6 +48,7 @@ function resetDb() {
   db.ingredient_reservations = [];
   db.payments = [];
   db.refunds = [];
+  db.shifts = [];
   db.audit_logs = [];
   db.cashPaymentRpcCalls = 0;
   db.receiptRpcCalls = 0;
@@ -1039,6 +1041,12 @@ await testCase("10. Reopened cancelled order cannot repay, append, finalize, unf
     isFinalized: true,
     txLifecycle: null,
   });
+  db.shifts.push({
+    id: "shift-kasir-open-1",
+    cashier_id: "user-kasir-1",
+    status: "open",
+    closed_at: null,
+  });
 
   const cashRes = await paymentsActions.processPosManualPaymentAction({
     orderId: UUID1,
@@ -1159,6 +1167,13 @@ await testCase("13. Valid active unpaid order (unexpired 404 or pending) remains
   const releaseRes = await paymentsActions.cancelActiveMidtransReservationAction(UUID1, { mode: "release_to_cash" });
   assert.equal(releaseRes.ok, true);
   assert.equal(releaseRes.data.orderCancelled, false);
+
+  db.shifts.push({
+    id: "shift-kasir-open-2",
+    cashier_id: "user-kasir-1",
+    status: "open",
+    closed_at: null,
+  });
 
   const cashRes = await paymentsActions.processPosManualPaymentAction({
     orderId: UUID1,
