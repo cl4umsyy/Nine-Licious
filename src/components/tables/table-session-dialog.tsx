@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useState, useTransition } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
+import { useRouter } from "next/navigation";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import {
   AlertTriangle,
   CheckCheck,
@@ -36,14 +44,36 @@ import {
 import { formatRupiah } from "@/lib/menu/format";
 import {
   closeDiningSessionAction,
-  completePosOrderAction,
   getDiningSessionSummaryAction,
 } from "@/lib/orders/actions";
 import { ORDER_STATUS_BADGES, ORDER_STATUS_LABELS } from "@/lib/orders/constants";
+import {
+  applyServedConfirmationToSessionSummary,
+  isOrderPendingServing,
+} from "@/lib/orders/serving";
+import { confirmOrderServedAction } from "@/lib/orders/serving-actions";
 import { formatSessionCode } from "@/lib/orders/session-closure";
 import type { DiningSessionSummary } from "@/lib/orders/types";
+import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { TABLE_SHAPE_LABELS, TABLE_STATUS_LABELS } from "@/lib/tables/constants";
 import type { DiningTable, TableStatus, TableZone } from "@/types/database";
+
+const WIB_TIME_FORMATTER = new Intl.DateTimeFormat("id-ID", {
+  timeZone: "Asia/Jakarta",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
+function formatWibTime(iso: string | null | undefined): string {
+  if (!iso) return "-";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "-";
+  return `${WIB_TIME_FORMATTER.format(date)} WIB`;
+}
+
+const REALTIME_DEBOUNCE_MS = 250;
+const FALLBACK_POLL_INTERVAL_MS = 15_000;
 
 const STATUS_BADGE_STYLE: Record<TableStatus, { badge: string; dot: string }> = {
   empty: {
@@ -73,13 +103,15 @@ export function TableSessionDialog({
   onClose,
   onSessionClosed,
 }: TableSessionDialogProps) {
+  const router = useRouter();
   const [sessionSummary, setSessionSummary] = useState<DiningSessionSummary | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoadingSummary, setIsLoadingSummary] = useState(false);
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [reloadNonce, setReloadNonce] = useState(0);
-  const [isCompletingOrder, startCompletingOrder] = useTransition();
+  const [isConfirmingServing, startConfirmingServing] = useTransition();
   const [isClosingSession, startClosingSession] = useTransition();
+  const realtimeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Reset state saat target meja berubah (pola resmi React: adjusting state on prop change)
   const [prevTableId, setPrevTableId] = useState<string | null>(table?.id ?? null);
@@ -92,8 +124,10 @@ export function TableSessionDialog({
     setIsLoadingSummary(Boolean(currentTableId));
   }
 
-  const refreshSummary = useCallback(() => {
-    setIsLoadingSummary(true);
+  const refreshSummary = useCallback((options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setIsLoadingSummary(true);
+    }
     setLoadError(null);
     setReloadNonce((n) => n + 1);
   }, []);
@@ -129,14 +163,103 @@ export function TableSessionDialog({
     };
   }, [currentTableId, reloadNonce]);
 
-  const handleCompleteOrder = (orderId: string) => {
-    startCompletingOrder(async () => {
-      const res = await completePosOrderAction(orderId);
+  // Sinkronisasi realtime + fallback polling selama modal Detail Meja terbuka.
+  // Perubahan `served_at` dari Daftar Pesanan / kasir lain langsung tercermin
+  // di modal tanpa harus menutup lalu membuka ulang dialog.
+  useEffect(() => {
+    if (!currentTableId) return;
+
+    let supabase: ReturnType<typeof createSupabaseBrowserClient> | null = null;
+    try {
+      supabase = createSupabaseBrowserClient();
+    } catch {
+      supabase = null;
+    }
+
+    const scheduleRefresh = () => {
+      if (realtimeTimerRef.current) {
+        clearTimeout(realtimeTimerRef.current);
+      }
+      realtimeTimerRef.current = setTimeout(() => {
+        realtimeTimerRef.current = null;
+        refreshSummary({ silent: true });
+      }, REALTIME_DEBOUNCE_MS);
+    };
+
+    let channel: RealtimeChannel | null = null;
+    if (supabase) {
+      channel = supabase
+        .channel(`table-session-${currentTableId}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "orders",
+            filter: `table_id=eq.${currentTableId}`,
+          },
+          scheduleRefresh,
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "dining_sessions",
+            filter: `table_id=eq.${currentTableId}`,
+          },
+          scheduleRefresh,
+        )
+        .subscribe();
+    }
+
+    const pollTimer = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        refreshSummary({ silent: true });
+      }
+    }, FALLBACK_POLL_INTERVAL_MS);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        refreshSummary({ silent: true });
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      clearInterval(pollTimer);
+      document.removeEventListener("visibilitychange", handleVisibility);
+      if (realtimeTimerRef.current) {
+        clearTimeout(realtimeTimerRef.current);
+        realtimeTimerRef.current = null;
+      }
+      if (supabase && channel) {
+        void supabase.removeChannel(channel);
+      }
+    };
+  }, [currentTableId, refreshSummary]);
+
+  const handleConfirmServing = (orderId: string) => {
+    startConfirmingServing(async () => {
+      const res = await confirmOrderServedAction(orderId);
       if (res.ok) {
-        toast.success(res.message || "Pesanan berhasil ditandai selesai diserahkan.");
-        refreshSummary();
+        const confirmed = res.data;
+        if (confirmed) {
+          setSessionSummary((prev) =>
+            applyServedConfirmationToSessionSummary(prev, {
+              orderId,
+              servedAt: confirmed.servedAt,
+              servedBy: confirmed.servedBy,
+              servedByName: confirmed.servedByName ?? null,
+            }),
+          );
+        }
+        toast.success(res.message || "Pesanan berhasil ditandai sudah disajikan.");
+        refreshSummary({ silent: true });
+        router.refresh();
       } else {
-        toast.error(res.message || "Gagal menyelesaikan pesanan.");
+        toast.error(res.message || "Gagal mengonfirmasi penyajian pesanan.");
+        refreshSummary({ silent: true });
       }
     });
   };
@@ -164,7 +287,19 @@ export function TableSessionDialog({
     ? zones.find((z) => z.id === table.zone_id)?.name ?? "-"
     : "-";
   const sessionCode = formatSessionCode(sessionSummary?.session_id);
-  const statusStyle = table ? STATUS_BADGE_STYLE[table.status] : STATUS_BADGE_STYLE.empty;
+  const servedOrderCount = sessionSummary
+    ? sessionSummary.orders.filter(
+        (order) => Boolean(order.served_at) || order.status === "completed",
+      ).length
+    : 0;
+  const rawTableStatus = sessionSummary?.table_status;
+  const activeTableStatus: TableStatus =
+    rawTableStatus === "empty" ||
+    rawTableStatus === "awaiting_payment" ||
+    rawTableStatus === "occupied"
+      ? rawTableStatus
+      : table?.status ?? "empty";
+  const statusStyle = STATUS_BADGE_STYLE[activeTableStatus];
 
   return (
     <>
@@ -187,7 +322,7 @@ export function TableSessionDialog({
                   className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold ${statusStyle.badge}`}
                 >
                   <span className={`size-1.5 rounded-full ${statusStyle.dot}`} />
-                  {TABLE_STATUS_LABELS[table.status]}
+                  {TABLE_STATUS_LABELS[activeTableStatus]}
                 </span>
               )}
             </div>
@@ -237,7 +372,7 @@ export function TableSessionDialog({
                       type="button"
                       size="sm"
                       variant="outline"
-                      onClick={refreshSummary}
+                      onClick={() => refreshSummary()}
                       className="h-8 text-xs shrink-0"
                     >
                       <RefreshCw className="size-3 mr-1" />
@@ -332,7 +467,7 @@ export function TableSessionDialog({
                           variant="ghost"
                           size="sm"
                           disabled={isLoadingSummary}
-                          onClick={refreshSummary}
+                          onClick={() => refreshSummary()}
                           className="h-7 px-2 text-[11px] text-muted-foreground hover:text-foreground"
                         >
                           <RefreshCw className="size-3 mr-1" />
@@ -352,8 +487,11 @@ export function TableSessionDialog({
                                 variant: "outline" as const,
                                 className: "",
                               };
-                            const isPaidReadyToServe =
-                              ord.status === "paid" && ord.payment_status === "paid";
+                            // Aturan penyajian sama persis dengan Daftar Pesanan
+                            // Kasir: hanya pesanan lunas, KDS 'ready', dan belum
+                            // memiliki `served_at` yang boleh ditandai disajikan.
+                            const canConfirmServing = isOrderPendingServing(ord);
+                            const isServed = Boolean(ord.served_at);
 
                             return (
                               <div
@@ -396,19 +534,50 @@ export function TableSessionDialog({
                                       </span>
                                     )}
                                   </div>
+                                  {isServed ? (
+                                    <div className="text-[11px] text-emerald-700 dark:text-emerald-300 flex flex-wrap items-center gap-1.5">
+                                      <CheckCircle2 className="size-3.5 shrink-0" />
+                                      <span className="font-semibold">Sudah Disajikan</span>
+                                      <span className="text-muted-foreground">
+                                        {formatWibTime(ord.served_at)}
+                                      </span>
+                                      {(ord.served_by_name || ord.served_by) && (
+                                        <span className="text-muted-foreground">
+                                          oleh {ord.served_by_name ?? "Petugas"}
+                                        </span>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    ord.kds_status && (
+                                      <div className="text-[11px] text-muted-foreground">
+                                        Status dapur:{" "}
+                                        <span className="font-semibold text-foreground">
+                                          {ord.kds_status === "ready"
+                                            ? "Siap Diambil"
+                                            : ord.kds_status === "preparing"
+                                              ? "Sedang Disiapkan"
+                                              : "Menunggu Dapur"}
+                                        </span>
+                                      </div>
+                                    )
+                                  )}
                                 </div>
 
-                                {isPaidReadyToServe && (
+                                {canConfirmServing && (
                                   <Button
                                     type="button"
                                     size="sm"
                                     variant="outline"
-                                    disabled={isCompletingOrder || isClosingSession}
-                                    onClick={() => handleCompleteOrder(ord.id)}
+                                    disabled={isConfirmingServing || isClosingSession}
+                                    onClick={() => handleConfirmServing(ord.id)}
                                     className="h-7.5 px-2.5 text-[11px] rounded-lg border-emerald-500/50 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 shrink-0"
                                   >
-                                    <CheckCheck className="size-3.5 mr-1" />
-                                    Tandai Selesai
+                                    {isConfirmingServing ? (
+                                      <LoaderCircle className="size-3.5 mr-1 animate-spin" />
+                                    ) : (
+                                      <CheckCheck className="size-3.5 mr-1" />
+                                    )}
+                                    Tandai Sudah Disajikan
                                   </Button>
                                 )}
                               </div>
@@ -426,7 +595,7 @@ export function TableSessionDialog({
                             <CheckCircle2 className="size-4 shrink-0 mt-0.5 text-emerald-600" />
                             <div className="space-y-0.5">
                               <p className="font-semibold">
-                                Seluruh tagihan pada sesi ini telah lunas.
+                                Seluruh tagihan lunas dan seluruh pesanan sudah disajikan.
                               </p>
                               <p className="text-[11px] opacity-90">
                                 Jika pelanggan sudah selesai makan dan meninggalkan meja, tutup sesi untuk mengembalikan meja ke status Kosong.
@@ -436,7 +605,7 @@ export function TableSessionDialog({
                           <Button
                             type="button"
                             size="default"
-                            disabled={isClosingSession || isCompletingOrder}
+                            disabled={isClosingSession || isConfirmingServing}
                             onClick={() => setIsConfirmOpen(true)}
                             className="w-full h-10 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm gap-2 shadow-xs"
                           >
@@ -467,7 +636,7 @@ export function TableSessionDialog({
                             className="w-full h-10 rounded-xl font-semibold text-xs gap-2"
                           >
                             <DoorOpen className="size-4" />
-                            Tutup Sesi Meja (Tagihan Belum Selesai)
+                            Tutup Sesi Meja (Belum Memenuhi Syarat)
                           </Button>
                         </div>
                       )}
@@ -534,6 +703,12 @@ export function TableSessionDialog({
                       <span>Total Pesanan</span>
                       <span className="font-semibold text-foreground">
                         {sessionSummary.total_orders} pesanan
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span>Pesanan Disajikan</span>
+                      <span className="font-semibold text-foreground">
+                        {servedOrderCount} dari {sessionSummary.orders.length} pesanan
                       </span>
                     </div>
                     <div className="flex items-center justify-between">

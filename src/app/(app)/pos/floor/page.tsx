@@ -10,6 +10,8 @@ import { ROLE_LABELS } from "@/lib/auth/roles";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import type { DiningTable, FloorPlan, TableZone } from "@/types/database";
 
+export const dynamic = "force-dynamic";
+
 export default async function PosFloorPage() {
   const session = await requireRole(["admin", "kasir"]);
   const supabase = await createSupabaseServerClient();

@@ -1,4 +1,6 @@
 import type { KdsStatus, OrderStatus, OrderType, PaymentStatus } from "@/types/database";
+import { evaluateDiningSessionClosure } from "./session-closure";
+import type { DiningSessionSummary } from "./types";
 
 export type PendingServingItem = {
   id: string;
@@ -42,6 +44,7 @@ export type ConfirmOrderServedResultData = {
   diningSessionId: string | null;
   servedAt: string;
   servedBy: string;
+  servedByName?: string | null;
 };
 
 export type OrderServingCandidate = {
@@ -49,7 +52,7 @@ export type OrderServingCandidate = {
   order_number?: string;
   status: OrderStatus | string;
   payment_status: PaymentStatus | string;
-  kds_status: KdsStatus | string | null | undefined;
+  kds_status?: KdsStatus | string | null | undefined;
   served_at?: string | null;
   grand_total?: number | null;
   paid_total?: number | null;
@@ -76,6 +79,58 @@ export function isOrderPendingServing(order: OrderServingCandidate): boolean {
   }
 
   return true;
+}
+
+/**
+ * Returns true when the order has an authoritative serving timestamp.
+ * `served_at` is the single source of truth for "sudah disajikan"; it must not
+ * be inferred from `status` or `kds_status` alone.
+ */
+export function isOrderServed(order: {
+  served_at?: string | null;
+}): boolean {
+  return Boolean(order.served_at);
+}
+
+export type ServedConfirmationUpdate = {
+  orderId: string;
+  servedAt: string;
+  servedBy?: string | null;
+  servedByName?: string | null;
+};
+
+/**
+ * Applies a successful serving confirmation to an in-memory dining session
+ * summary so the table dialog updates immediately without waiting for a full
+ * page reload. The next server refresh remains authoritative.
+ */
+export function applyServedConfirmationToSessionSummary(
+  summary: DiningSessionSummary | null,
+  update: ServedConfirmationUpdate,
+): DiningSessionSummary | null {
+  if (!summary) return summary;
+
+  let changed = false;
+  const orders = summary.orders.map((order) => {
+    if (order.id !== update.orderId) return order;
+
+    changed = true;
+    return {
+      ...order,
+      served_at: update.servedAt,
+      served_by: update.servedBy ?? null,
+      served_by_name: update.servedByName ?? null,
+    };
+  });
+
+  if (!changed) return summary;
+  const nextSummary: DiningSessionSummary = { ...summary, orders };
+  const evaluation = evaluateDiningSessionClosure(nextSummary);
+  return {
+    ...nextSummary,
+    can_close_session: evaluation.canClose,
+    blocking_reason: evaluation.blockingReason,
+  };
 }
 
 export type ServingValidationResult =

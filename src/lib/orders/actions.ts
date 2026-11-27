@@ -28,6 +28,7 @@ import {
 import { verifyAndReleaseGatewayBeforeOrderCancel } from "@/lib/midtrans/reconcile";
 import { validateOrderInventoryAvailability } from "@/lib/orders/inventory-validation";
 import { canCancelOrder } from "@/lib/orders/status-rules";
+import { isMissingServingSchemaError } from "@/lib/orders/serving";
 import { requireActiveShiftForPosOrder } from "@/lib/shifts/guard";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
@@ -140,6 +141,96 @@ async function fetchFullOrderDetails(
     discounts: (discountsData ?? []) as OrderDiscount[],
     tableName: dining_tables?.name ?? tableNameFallback ?? null,
   };
+}
+
+type SessionServingInfoRow = {
+  id: string;
+  served_at: string | null;
+  served_by: string | null;
+};
+
+type ProfileDisplayRow = {
+  id: string;
+  username: string;
+  full_name: string | null;
+};
+
+/**
+ * Melengkapi ringkasan pesanan sesi dengan `served_at`, `served_by`, dan nama
+ * petugas penyajian. RPC `get_dining_session_summary` versi lama belum
+ * mengembalikan kolom penyajian, sehingga data harus diambil langsung dari
+ * `public.orders` agar Daftar Pesanan dan Detail Meja memakai sumber yang sama.
+ */
+async function enrichSessionOrdersWithServingInfo(
+  supabase: SupabaseClient,
+  orders: DiningSessionOrderSummary[],
+): Promise<DiningSessionOrderSummary[]> {
+  if (orders.length === 0) return orders;
+
+  const orderIds = orders.map((order) => order.id);
+  const { data: servingRows, error: servingError } = await supabase
+    .from("orders")
+    .select("id, served_at, served_by")
+    .in("id", orderIds);
+
+  if (servingError) {
+    if (!isMissingServingSchemaError(servingError)) {
+      console.error(
+        "[dining-session] Gagal memuat status penyajian pesanan:",
+        servingError.message,
+      );
+    }
+    return orders;
+  }
+
+  const servingById = new Map<string, SessionServingInfoRow>();
+  for (const row of (servingRows ?? []) as SessionServingInfoRow[]) {
+    servingById.set(row.id, row);
+  }
+
+  const servedByIds = Array.from(
+    new Set(
+      Array.from(servingById.values())
+        .map((row) => row.served_by)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  );
+
+  const nameById = new Map<string, string>();
+  if (servedByIds.length > 0) {
+    const adminClient = createSupabaseAdminClient();
+    const profileClient = adminClient ?? supabase;
+    const { data: profiles, error: profileError } = await profileClient
+      .from("profiles")
+      .select("id, username, full_name")
+      .in("id", servedByIds);
+
+    if (profileError) {
+      console.error(
+        "[dining-session] Gagal memuat nama petugas penyajian:",
+        profileError.message,
+      );
+    } else {
+      for (const profile of (profiles ?? []) as ProfileDisplayRow[]) {
+        const displayName = profile.full_name?.trim() || profile.username;
+        if (displayName) nameById.set(profile.id, displayName);
+      }
+    }
+  }
+
+  return orders.map((order) => {
+    const serving = servingById.get(order.id);
+    if (!serving) return order;
+
+    return {
+      ...order,
+      served_at: serving.served_at ?? null,
+      served_by: serving.served_by ?? null,
+      served_by_name: serving.served_by
+        ? nameById.get(serving.served_by) ?? null
+        : null,
+    };
+  });
 }
 
 /**
@@ -1573,7 +1664,7 @@ export async function closeDiningSessionAction(
     // 7 Pintu Validasi Ketat di fallback
     const { data: ordersData, error: ordersError } = await context.supabase
       .from("orders")
-      .select("id, order_number, status, payment_status, kds_status, grand_total, paid_total")
+      .select("id, order_number, status, payment_status, kds_status, grand_total, paid_total, served_at")
       .eq("dining_session_id", sessionId);
 
     if (ordersError) {
@@ -1605,7 +1696,20 @@ export async function closeDiningSessionAction(
       };
     }
 
-    // Pintu 3 & 4: Alokasi split bill reserved & Midtrans non-terminal
+    // Pintu 3: Seluruh pesanan aktif harus sudah disajikan
+    const unservedOrders = orders.filter(
+      (o) =>
+        !["cancelled", "refunded", "completed"].includes(o.status) &&
+        !o.served_at,
+    );
+    if (unservedOrders.length > 0) {
+      return {
+        ok: false,
+        message: `Tidak dapat menutup sesi: Terdapat ${unservedOrders.length} pesanan yang belum disajikan kepada pelanggan.`,
+      };
+    }
+
+    // Pintu 4 & 5: Alokasi split bill reserved & Midtrans non-terminal
     const orderIds = orders.map((o) => o.id);
     if (orderIds.length > 0) {
       const { count: reservedCount } = await context.supabase
@@ -1736,10 +1840,15 @@ export async function getDiningSessionSummaryAction(
 
   if (!rpcError && rpcData) {
     const raw = rpcData as DiningSessionSummary;
+    const baseOrders = Array.isArray(raw.orders) ? raw.orders : [];
+    const orders = await enrichSessionOrdersWithServingInfo(
+      context.supabase,
+      baseOrders,
+    );
     const normalized: DiningSessionSummary = {
       ...raw,
       session_status: raw.has_active_session ? "open" : undefined,
-      orders: Array.isArray(raw.orders) ? raw.orders : [],
+      orders,
     };
     const evaluation = evaluateDiningSessionClosure(normalized);
     return {
@@ -1806,12 +1915,12 @@ export async function getDiningSessionSummaryAction(
     const { data: ordersData } = await context.supabase
       .from("orders")
       .select(
-        "id, order_number, status, payment_status, kds_status, subtotal, discount_total, tax_total, service_total, grand_total, paid_total, created_at",
+        "id, order_number, status, payment_status, kds_status, subtotal, discount_total, tax_total, service_total, grand_total, paid_total, served_at, served_by, created_at",
       )
       .eq("dining_session_id", session.id)
       .order("created_at", { ascending: true });
 
-    const orders: DiningSessionOrderSummary[] = (ordersData ?? []).map((o) => ({
+    const baseOrders: DiningSessionOrderSummary[] = (ordersData ?? []).map((o) => ({
       id: o.id,
       order_number: o.order_number,
       status: o.status,
@@ -1824,8 +1933,15 @@ export async function getDiningSessionSummaryAction(
       grand_total: Number(o.grand_total) || 0,
       paid_total: Number(o.paid_total) || 0,
       remaining_balance: Math.max(0, (Number(o.grand_total) || 0) - (Number(o.paid_total) || 0)),
+      served_at: o.served_at ?? null,
+      served_by: o.served_by ?? null,
       created_at: o.created_at,
     }));
+
+    const orders = await enrichSessionOrdersWithServingInfo(
+      context.supabase,
+      baseOrders,
+    );
 
     const unpaidCount = orders.filter((o) =>
       ["awaiting_payment", "partially_paid"].includes(o.status),

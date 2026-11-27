@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import {
   AlertTriangle,
   Check,
@@ -21,6 +22,7 @@ import { TableSessionDialog } from "@/components/tables/table-session-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import {
   clampToFloorPlan,
   FLOOR_PLAN_HEIGHT,
@@ -147,7 +149,61 @@ export function FloorPlanCanvas({
   // Local dragged positions: map table id -> { x, y }
   const [localPositions, setLocalPositions] = useState<Record<string, { x: number; y: number }>>({});
   const [selectedTable, setSelectedTable] = useState<DiningTable | null>(null);
-  const [inspectTable, setInspectTable] = useState<DiningTable | null>(null);
+  const [inspectTableId, setInspectTableId] = useState<string | null>(null);
+  const realtimeRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const inspectTable = useMemo(
+    () =>
+      inspectTableId
+        ? effectiveTables.find((t) => t.id === inspectTableId) ?? null
+        : null,
+    [effectiveTables, inspectTableId],
+  );
+
+  // Sinkronisasi realtime denah meja saat tampilan operasional kasir/admin aktif
+  useEffect(() => {
+    if (interactive || selectable) return;
+
+    let supabase: ReturnType<typeof createSupabaseBrowserClient> | null = null;
+    try {
+      supabase = createSupabaseBrowserClient();
+    } catch {
+      supabase = null;
+    }
+
+    if (!supabase) return;
+
+    const scheduleRefresh = () => {
+      if (realtimeRefreshTimerRef.current) {
+        clearTimeout(realtimeRefreshTimerRef.current);
+      }
+      realtimeRefreshTimerRef.current = setTimeout(() => {
+        realtimeRefreshTimerRef.current = null;
+        router.refresh();
+      }, 250);
+    };
+
+    const channel: RealtimeChannel = supabase
+      .channel("pos-floor-dining-tables")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "dining_tables",
+        },
+        scheduleRefresh,
+      )
+      .subscribe();
+
+    return () => {
+      if (realtimeRefreshTimerRef.current) {
+        clearTimeout(realtimeRefreshTimerRef.current);
+        realtimeRefreshTimerRef.current = null;
+      }
+      void supabase.removeChannel(channel);
+    };
+  }, [interactive, selectable, router]);
 
   const handleSessionClosed = (tableId: string) => {
     setStatusOverrides((prev) => ({ ...prev, [tableId]: "empty" }));
@@ -568,7 +624,7 @@ export function FloorPlanCanvas({
                         setSelectedTable(table);
                         return;
                       }
-                      if (!interactive) setInspectTable(table);
+                      if (!interactive) setInspectTableId(table.id);
                     }}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
@@ -577,7 +633,7 @@ export function FloorPlanCanvas({
                           onSelectTable?.(table);
                           setSelectedTable(table);
                         } else if (!interactive) {
-                          setInspectTable(table);
+                          setInspectTableId(table.id);
                         }
                       }
                     }}
@@ -705,7 +761,7 @@ export function FloorPlanCanvas({
       <TableSessionDialog
         table={inspectTable}
         zones={zones}
-        onClose={() => setInspectTable(null)}
+        onClose={() => setInspectTableId(null)}
         onSessionClosed={handleSessionClosed}
       />
     </div>

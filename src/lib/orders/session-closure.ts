@@ -46,11 +46,14 @@ export function formatSessionCode(sessionId?: string | null): string {
  * 3. Tidak boleh ada pesanan aktif dengan payment_status unpaid / partially_paid
  *    atau sisa tagihan (grand_total - paid_total) > 0 — termasuk jika ada refund.
  * 4. Total sisa tagihan sesi harus 0.
- * 5. Tidak boleh ada alokasi split bill berstatus reserved.
- * 6. Tidak boleh ada transaksi Midtrans non-terminal atau webhook sedang diproses.
- * 7. Tidak boleh ada permohonan refund berstatus pending.
- * 8. Pesanan yang seluruh tagihannya sudah lunas (status='paid', remaining=0)
- *    diperbolehkan untuk otomatis ditandai 'completed' saat kasir menutup sesi meja.
+ * 5. Seluruh pesanan aktif harus sudah disajikan (`served_at` terisi). Pesanan
+ *    berstatus 'completed' dari alur lama tetap dianggap sudah diserahkan.
+ * 6. Tidak boleh ada alokasi split bill berstatus reserved.
+ * 7. Tidak boleh ada transaksi Midtrans non-terminal atau webhook sedang diproses.
+ * 8. Tidak boleh ada permohonan refund berstatus pending.
+ * 9. Pesanan yang seluruh tagihannya sudah lunas DAN sudah disajikan
+ *    (status='paid', remaining=0) diperbolehkan untuk otomatis ditandai
+ *    'completed' saat kasir menutup sesi meja.
  */
 export function evaluateDiningSessionClosure(
   summary: DiningSessionSummary,
@@ -123,7 +126,24 @@ export function evaluateDiningSessionClosure(
     };
   }
 
-  // 3. Cek alokasi split bill reserved
+  // 3. Seluruh pesanan aktif harus sudah disajikan.
+  //    `served_at` adalah sumber kebenaran utama. Pesanan 'completed' dari
+  //    alur lama (sebelum kolom served_at dipakai) tetap dianggap sudah
+  //    diserahkan agar sesi lama tidak terkunci permanen.
+  const unservedOrders = orders.filter((order) => {
+    if (TERMINAL_CLOSED_ORDER_STATUSES.has(order.status)) return false;
+    if (order.status === "completed") return false;
+    return !order.served_at;
+  });
+
+  if (unservedOrders.length > 0) {
+    return {
+      ...emptyResult,
+      blockingReason: `Sesi belum dapat ditutup: masih terdapat ${unservedOrders.length} pesanan yang belum disajikan kepada pelanggan.`,
+    };
+  }
+
+  // 4. Cek alokasi split bill reserved
   if ((summary.reserved_allocations_count ?? 0) > 0) {
     return {
       ...emptyResult,
@@ -132,7 +152,7 @@ export function evaluateDiningSessionClosure(
     };
   }
 
-  // 4. Cek transaksi Midtrans non-terminal
+  // 5. Cek transaksi Midtrans non-terminal
   if ((summary.pending_midtrans_transactions_count ?? 0) > 0) {
     return {
       ...emptyResult,
@@ -141,7 +161,7 @@ export function evaluateDiningSessionClosure(
     };
   }
 
-  // 5. Cek webhook Midtrans in-flight
+  // 6. Cek webhook Midtrans in-flight
   if ((summary.processing_webhooks_count ?? 0) > 0) {
     return {
       ...emptyResult,
@@ -150,7 +170,7 @@ export function evaluateDiningSessionClosure(
     };
   }
 
-  // 6. Cek permohonan refund pending
+  // 7. Cek permohonan refund pending
   if ((summary.pending_refund_count ?? 0) > 0) {
     return {
       ...emptyResult,

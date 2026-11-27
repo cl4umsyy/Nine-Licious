@@ -352,7 +352,11 @@ export async function confirmOrderServedAction(
   if (!rpcError && rpcData) {
     const res = rpcData as RpcConfirmServedResponse;
     revalidatePath("/pos");
+    revalidatePath("/pos/orders");
+    revalidatePath("/pos/floor");
     revalidatePath("/kitchen");
+    revalidatePath("/queue");
+    revalidatePath("/admin/tables");
 
     return {
       ok: true,
@@ -366,6 +370,8 @@ export async function confirmOrderServedAction(
         diningSessionId: res.dining_session_id,
         servedAt: res.served_at,
         servedBy: res.served_by,
+        servedByName:
+          actor.session.profile.full_name || actor.session.profile.username,
       },
     };
   }
@@ -496,7 +502,11 @@ export async function confirmOrderServedAction(
   });
 
   revalidatePath("/pos");
+  revalidatePath("/pos/orders");
+  revalidatePath("/pos/floor");
   revalidatePath("/kitchen");
+  revalidatePath("/queue");
+  revalidatePath("/admin/tables");
 
   return {
     ok: true,
@@ -510,6 +520,8 @@ export async function confirmOrderServedAction(
       diningSessionId: updated.dining_session_id,
       servedAt: updated.served_at,
       servedBy: updated.served_by,
+      servedByName:
+        actor.session.profile.full_name || actor.session.profile.username,
     },
   };
 }

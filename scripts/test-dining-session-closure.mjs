@@ -100,6 +100,21 @@ function evaluateDiningSessionClosure(summary) {
     };
   }
 
+  // Seluruh pesanan aktif harus sudah disajikan (`served_at` terisi).
+  // Pesanan 'completed' dari alur lama tetap dianggap sudah diserahkan.
+  const unservedOrders = orders.filter((order) => {
+    if (TERMINAL_CLOSED_ORDER_STATUSES.has(order.status)) return false;
+    if (order.status === "completed") return false;
+    return !order.served_at;
+  });
+
+  if (unservedOrders.length > 0) {
+    return {
+      ...emptyResult,
+      blockingReason: `Sesi belum dapat ditutup: masih terdapat ${unservedOrders.length} pesanan yang belum disajikan kepada pelanggan.`,
+    };
+  }
+
   if ((summary.reserved_allocations_count ?? 0) > 0) {
     return {
       ...emptyResult,
@@ -184,6 +199,7 @@ function makeOrder(overrides = {}) {
     paid_total: 34500,
     refunded_total: 0,
     remaining_balance: 0,
+    served_at: "2026-11-18T06:57:00.000Z",
     created_at: new Date().toISOString(),
     ...overrides,
   };
@@ -257,14 +273,57 @@ runTest("1a. Sesi dengan pesanan lunas (status='completed', remaining=0) dapat d
   assert.equal(res.paidOrdersToComplete.length, 0);
 });
 
-runTest("1b. Sesi dengan pesanan lunas (status='paid', kds_status='queued') dapat ditutup & ditandai auto-complete", () => {
+runTest("1b. Sesi dengan pesanan lunas (status='paid', kds_status='ready') dapat ditutup & ditandai auto-complete", () => {
   const res = evaluateDiningSessionClosure(
-    makeSummary({ orders: [makeOrder({ status: "paid", payment_status: "paid", kds_status: "queued" })] }),
+    makeSummary({ orders: [makeOrder({ status: "paid", payment_status: "paid", kds_status: "ready" })] }),
   );
   assert.equal(res.canClose, true);
   assert.equal(res.blockingReason, null);
   assert.equal(res.paidOrdersToComplete.length, 1);
   assert.equal(res.paidOrdersToComplete[0].id, "ord-1");
+});
+
+runTest("1c. Pesanan lunas & KDS ready tetapi belum disajikan (served_at NULL) DITOLAK", () => {
+  const res = evaluateDiningSessionClosure(
+    makeSummary({
+      orders: [
+        makeOrder({ status: "paid", payment_status: "paid", kds_status: "ready", served_at: null }),
+      ],
+    }),
+  );
+  assert.equal(res.canClose, false);
+  assert.ok(res.blockingReason.includes("belum disajikan"));
+});
+
+runTest("1d. Status penyajian dievaluasi terpisah per pesanan dalam satu sesi", () => {
+  const res = evaluateDiningSessionClosure(
+    makeSummary({
+      orders: [
+        makeOrder({ id: "ord-1", order_number: "ORD-001", status: "paid", kds_status: "ready" }),
+        makeOrder({
+          id: "ord-2",
+          order_number: "ORD-002",
+          status: "paid",
+          kds_status: "ready",
+          served_at: null,
+        }),
+      ],
+    }),
+  );
+  assert.equal(res.canClose, false);
+  assert.ok(res.blockingReason.includes("1 pesanan"));
+  assert.ok(res.blockingReason.includes("belum disajikan"));
+});
+
+runTest("1e. Pesanan 'completed' lama tanpa served_at tetap dianggap sudah diserahkan", () => {
+  const res = evaluateDiningSessionClosure(
+    makeSummary({
+      orders: [
+        makeOrder({ status: "completed", kds_status: null, served_at: null }),
+      ],
+    }),
+  );
+  assert.equal(res.canClose, true);
 });
 
 // 2. Sesi belum lunas
@@ -331,7 +390,7 @@ runTest("3b. Sesi dengan pesanan utama + pesanan tambahan SEMUA LUNAS dapat ditu
     makeSummary({
       orders: [
         makeOrder({ id: "ord-1", order_number: "ORD-001", status: "completed", kds_status: null }),
-        makeOrder({ id: "ord-2", order_number: "ORD-002", status: "paid", payment_status: "paid", kds_status: "queued" }),
+        makeOrder({ id: "ord-2", order_number: "ORD-002", status: "paid", payment_status: "paid", kds_status: "ready" }),
       ],
     }),
   );
@@ -470,6 +529,8 @@ runTest("8. Verifikasi kontrak file source: session-closure, actions, dialog kon
   assert.ok(actionsSrc.includes('sessionRow.status !== "open"'));
   assert.ok(actionsSrc.includes('evaluateDiningSessionClosure'));
   assert.ok(actionsSrc.includes('revalidatePosPaths()'));
+  assert.ok(actionsSrc.includes('served_at'));
+  assert.ok(actionsSrc.includes('belum disajikan'));
 
   const dialogSrc = fs.readFileSync(
     path.join(process.cwd(), "src", "components", "tables", "table-session-dialog.tsx"),
@@ -483,6 +544,12 @@ runTest("8. Verifikasi kontrak file source: session-closure, actions, dialog kon
   assert.ok(dialogSrc.includes("Total Pembayaran"));
   assert.ok(dialogSrc.includes("Sisa Tagihan"));
   assert.ok(dialogSrc.includes("Sesi Aktif"));
+  assert.ok(dialogSrc.includes("confirmOrderServedAction"));
+  assert.ok(dialogSrc.includes("Tandai Sudah Disajikan"));
+  assert.ok(dialogSrc.includes("isOrderPendingServing"));
+  assert.ok(dialogSrc.includes("served_at"));
+  assert.equal(dialogSrc.includes("completePosOrderAction"), false);
+  assert.equal(dialogSrc.includes("Tandai Selesai"), false);
 
   const floorSrc = fs.readFileSync(
     path.join(process.cwd(), "src", "components", "tables", "floor-plan-canvas.tsx"),

@@ -728,6 +728,62 @@ test("15. Final Security Audit: constraint aman thd ON DELETE SET NULL, RPC sear
   );
 });
 
+// 16. Sinkronisasi Daftar Pesanan, Detail Meja, dan Penutupan Sesi Meja
+test("16. Detail Meja memakai aturan penyajian yang sama & sesi hanya bisa ditutup setelah semua pesanan disajikan", () => {
+  // Aturan tombol: lunas + KDS ready + belum served_at.
+  const unservedReady = {
+    status: "paid",
+    payment_status: "paid",
+    kds_status: "ready",
+    served_at: null,
+    grand_total: 34500,
+    paid_total: 34500,
+  };
+  assert.equal(isOrderPendingServing(unservedReady), true);
+
+  const alreadyServed = { ...unservedReady, served_at: "2026-11-18T06:57:00.000Z" };
+  assert.equal(isOrderPendingServing(alreadyServed), false);
+
+  const notReady = { ...unservedReady, kds_status: "preparing" };
+  assert.equal(isOrderPendingServing(notReady), false);
+
+  const unpaid = { ...unservedReady, payment_status: "unpaid", paid_total: 0 };
+  assert.equal(isOrderPendingServing(unpaid), false);
+
+  const dialogSrc = readProjectFile("src/components/tables/table-session-dialog.tsx");
+  const closureSrc = readProjectFile("src/lib/orders/session-closure.ts");
+  const actionsSrc = readProjectFile("src/lib/orders/actions.ts");
+  const servingSrc = readProjectFile("src/lib/orders/serving.ts");
+
+  // Detail Meja memakai aksi konfirmasi penyajian yang sama dengan Daftar Pesanan.
+  assert.match(dialogSrc, /confirmOrderServedAction/);
+  assert.match(dialogSrc, /isOrderPendingServing/);
+  assert.match(dialogSrc, /applyServedConfirmationToSessionSummary/);
+  assert.match(dialogSrc, /Tandai Sudah Disajikan/);
+  assert.match(dialogSrc, /served_at/);
+  assert.match(dialogSrc, /served_by_name/);
+  assert.match(dialogSrc, /formatWibTime/);
+  assert.equal(/completePosOrderAction/.test(dialogSrc), false);
+  assert.equal(/Tandai Selesai/.test(dialogSrc), false);
+
+  // Sinkronisasi realtime + fallback polling + cleanup.
+  assert.match(dialogSrc, /postgres_changes/);
+  assert.match(dialogSrc, /removeChannel/);
+  assert.match(dialogSrc, /FALLBACK_POLL_INTERVAL_MS/);
+  assert.match(dialogSrc, /router\.refresh\(\)/);
+
+  // Aturan penutupan sesi: wajib served_at untuk pesanan aktif.
+  assert.match(closureSrc, /belum disajikan/);
+  assert.match(closureSrc, /!order\.served_at/);
+  assert.match(servingSrc, /export function isOrderServed/);
+  assert.match(servingSrc, /export function applyServedConfirmationToSessionSummary/);
+
+  // Ringkasan sesi mengambil served_at/served_by dari sumber yang sama dengan Daftar Pesanan.
+  assert.match(actionsSrc, /enrichSessionOrdersWithServingInfo/);
+  assert.match(actionsSrc, /served_at, served_by/);
+  assert.match(actionsSrc, /belum disajikan kepada pelanggan/);
+});
+
 console.log("\n-----------------------------------------------------------------------");
 console.log(`  HASIL ORDER SERVING CONFIRMATION: ${passed} PASS, ${failed} FAIL`);
 console.log("-----------------------------------------------------------------------\n");

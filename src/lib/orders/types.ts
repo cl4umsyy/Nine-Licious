@@ -80,6 +80,9 @@ export type DiningSessionOrderSummary = {
   paid_total: number;
   refunded_total?: number;
   remaining_balance: number;
+  served_at?: string | null;
+  served_by?: string | null;
+  served_by_name?: string | null;
   created_at: string;
 };
 
