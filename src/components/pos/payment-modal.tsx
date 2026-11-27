@@ -52,7 +52,15 @@ import {
   processPosManualPaymentAction,
   type OrderPaymentSummaryData,
 } from "@/lib/payments/actions";
-import { getActiveShiftAction } from "@/lib/shifts/actions";
+import {
+  getActiveShiftAction,
+  getGlobalActiveShiftStatusAction,
+} from "@/lib/shifts/actions";
+import {
+  formatOnDutyCashierLabel,
+  isShiftLockedByOtherCashier,
+} from "@/lib/shifts/format";
+import type { GlobalActiveShiftStatus } from "@/lib/shifts/types";
 import type { Shift } from "@/types/database";
 
 declare global {
@@ -82,6 +90,7 @@ export type PaymentModalProps = {
   onOrderCancelled?: (orderId: string) => void;
   onOpenCancelOrder?: (order: OrderWithDetails) => void;
   activeShift?: Shift | null;
+  globalShiftStatus?: GlobalActiveShiftStatus | null;
 };
 
 export function PaymentModal({
@@ -92,22 +101,44 @@ export function PaymentModal({
   onOrderCancelled,
   onOpenCancelOrder,
   activeShift: propActiveShift,
+  globalShiftStatus: propGlobalShiftStatus,
 }: PaymentModalProps) {
   const [midtransWaiting, setMidtransWaiting] = useState(false);
   const [method, setMethod] = useState<PaymentMethodTab>("cash");
   const [splitMode, setSplitMode] = useState<SplitMode>("full");
   const [fetchedActiveShift, setFetchedActiveShift] = useState<Shift | null>(null);
+  const [fetchedGlobalShiftStatus, setFetchedGlobalShiftStatus] =
+    useState<GlobalActiveShiftStatus | null>(null);
   const activeShift = propActiveShift !== undefined ? propActiveShift : fetchedActiveShift;
+  const globalShiftStatus =
+    propGlobalShiftStatus !== undefined
+      ? propGlobalShiftStatus
+      : fetchedGlobalShiftStatus;
   const [isLoadingShift, setIsLoadingShift] = useState(false);
 
   useEffect(() => {
-    if (propActiveShift !== undefined || !isOpen) return;
+    if (
+      (propActiveShift !== undefined && propGlobalShiftStatus !== undefined) ||
+      !isOpen
+    ) {
+      return;
+    }
     let isMounted = true;
     async function fetchShift() {
       setIsLoadingShift(true);
-      const res = await getActiveShiftAction();
-      if (isMounted && res.ok) {
-        setFetchedActiveShift((res.data as unknown as Shift) || null);
+      const [shiftRes, globalRes] = await Promise.all([
+        propActiveShift === undefined
+          ? getActiveShiftAction()
+          : Promise.resolve(null),
+        propGlobalShiftStatus === undefined
+          ? getGlobalActiveShiftStatusAction()
+          : Promise.resolve(null),
+      ]);
+      if (isMounted && shiftRes?.ok) {
+        setFetchedActiveShift((shiftRes.data as unknown as Shift) || null);
+      }
+      if (isMounted && globalRes?.ok && globalRes.data) {
+        setFetchedGlobalShiftStatus(globalRes.data);
       }
       if (isMounted) setIsLoadingShift(false);
     }
@@ -115,7 +146,7 @@ export function PaymentModal({
     return () => {
       isMounted = false;
     };
-  }, [isOpen, propActiveShift]);
+  }, [isOpen, propActiveShift, propGlobalShiftStatus]);
 
   const remainingBalance = useMemo(() => {
     if (!order) return 0;
@@ -200,6 +231,7 @@ export function PaymentModal({
             activeSnapToken={activeSnapToken}
             setActiveSnapToken={setActiveSnapToken}
             activeShift={activeShift}
+            globalShiftStatus={globalShiftStatus}
             isLoadingShift={isLoadingShift}
           />
         ) : null}
@@ -234,6 +266,7 @@ function PaymentModalContent({
   activeSnapToken,
   setActiveSnapToken,
   activeShift,
+  globalShiftStatus,
   isLoadingShift,
 }: {
   order: OrderWithDetails;
@@ -261,8 +294,15 @@ function PaymentModalContent({
   activeSnapToken: string | null;
   setActiveSnapToken: (token: string | null) => void;
   activeShift: Shift | null;
+  globalShiftStatus?: GlobalActiveShiftStatus | null;
   isLoadingShift: boolean;
 }) {
+  const isShiftLockedByOther =
+    !activeShift && isShiftLockedByOtherCashier(globalShiftStatus);
+  const onDutyCashierLabel = formatOnDutyCashierLabel(
+    globalShiftStatus?.cashierName,
+    globalShiftStatus?.cashierUsername,
+  );
   // State proses transaksi, reservasi gateway & Midtrans
   const [isSubmitting, startTransition] = useTransition();
   const [isVerifyingMidtrans, setIsVerifyingMidtrans] = useState(false);
@@ -490,7 +530,9 @@ function PaymentModalContent({
 
     if (method === "cash" && !activeShift) {
       toast.error(
-        "Kasir belum membuka shift kasir. Buka shift terlebih dahulu sebelum memproses pembayaran tunai.",
+        isShiftLockedByOther
+          ? `Shift kasir aktif sedang digunakan oleh ${onDutyCashierLabel}. Tutup shift aktif tersebut terlebih dahulu sebelum memproses pembayaran tunai.`
+          : "Kasir belum membuka shift kasir. Buka shift terlebih dahulu sebelum memproses pembayaran tunai.",
       );
       return;
     }
@@ -1299,9 +1341,15 @@ function PaymentModalContent({
                   <div className="flex items-start gap-2">
                     <AlertCircle className="size-4 shrink-0 mt-0.5" />
                     <div className="space-y-1">
-                      <p className="font-bold">Shift Kasir Belum Dibuka</p>
+                      <p className="font-bold">
+                        {isShiftLockedByOther
+                          ? `Shift Digunakan oleh ${onDutyCashierLabel}`
+                          : "Shift Kasir Belum Dibuka"}
+                      </p>
                       <p className="leading-relaxed">
-                        Pembayaran tunai mewajibkan shift kasir aktif untuk pencatatan laci kas fisik. Buka shift terlebih dahulu untuk memproses transaksi tunai.
+                        {isShiftLockedByOther
+                          ? `Hanya 1 shift kasir yang dapat aktif secara global. Anda tidak dapat menggunakan laci kas milik ${onDutyCashierLabel} untuk pembayaran tunai.`
+                          : "Pembayaran tunai mewajibkan shift kasir aktif untuk pencatatan laci kas fisik. Buka shift terlebih dahulu untuk memproses transaksi tunai."}
                       </p>
                     </div>
                   </div>
@@ -1309,7 +1357,9 @@ function PaymentModalContent({
                     <Button asChild size="sm" variant="destructive" className="h-8 text-xs font-semibold rounded-lg gap-1.5">
                       <Link href="/pos/shift" target="_blank">
                         <Wallet className="size-3.5" />
-                        <span>Buka Shift Sekarang</span>
+                        <span>
+                          {isShiftLockedByOther ? "Lihat Status Shift" : "Buka Shift Sekarang"}
+                        </span>
                       </Link>
                     </Button>
                   </div>
@@ -1762,7 +1812,9 @@ function PaymentModalContent({
             ) : method === "cash" && !activeShift ? (
               <>
                 <Wallet className="size-4 shrink-0" />
-                <span>Buka Shift Dahulu</span>
+                <span>
+                  {isShiftLockedByOther ? "Shift Dipakai Kasir Lain" : "Buka Shift Dahulu"}
+                </span>
               </>
             ) : (
               <>

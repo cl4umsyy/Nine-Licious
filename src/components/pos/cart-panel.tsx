@@ -36,6 +36,7 @@ export type CartPanelProps = {
   orderNotes: string;
   isSubmitting: boolean;
   hasActiveShift?: boolean;
+  lockedByCashierLabel?: string | null;
   totals: CartCalculationWithDiscounts;
   selectedOrderPromoName?: string | null;
   hasManualDiscount?: boolean;
@@ -59,6 +60,7 @@ export function CartPanel({
   orderNotes,
   isSubmitting,
   hasActiveShift = true,
+  lockedByCashierLabel = null,
   totals,
   selectedOrderPromoName,
   hasManualDiscount,
@@ -444,18 +446,36 @@ export function CartPanel({
 
         {/* Shift Closed Notice */}
         {!hasActiveShift && (
-          <div className="w-full rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-950 dark:text-amber-100 flex items-center justify-between gap-2">
+          <div
+            className={`w-full rounded-xl border px-3 py-2 text-[11px] flex items-center justify-between gap-2 ${
+              lockedByCashierLabel
+                ? "border-rose-500/40 bg-rose-500/10 text-rose-950 dark:text-rose-100"
+                : "border-amber-500/40 bg-amber-500/10 text-amber-950 dark:text-amber-100"
+            }`}
+          >
             <div className="flex items-center gap-2 min-w-0">
-              <Wallet className="size-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+              <Wallet
+                className={`size-3.5 shrink-0 ${
+                  lockedByCashierLabel
+                    ? "text-rose-600 dark:text-rose-400"
+                    : "text-amber-600 dark:text-amber-400"
+                }`}
+              />
               <span className="font-medium leading-snug">
-                Shift belum dibuka. Buka shift dahulu untuk membuat pesanan.
+                {lockedByCashierLabel
+                  ? `Shift aktif sedang digunakan oleh ${lockedByCashierLabel}. Tutup shift aktif dahulu.`
+                  : "Shift belum dibuka. Buka shift dahulu untuk membuat pesanan."}
               </span>
             </div>
             <Link
               href="/pos/shift"
-              className="font-bold text-amber-700 dark:text-amber-300 underline underline-offset-2 shrink-0"
+              className={`font-bold underline underline-offset-2 shrink-0 ${
+                lockedByCashierLabel
+                  ? "text-rose-700 dark:text-rose-300"
+                  : "text-amber-700 dark:text-amber-300"
+              }`}
             >
-              Buka Shift
+              {lockedByCashierLabel ? "Status Shift" : "Buka Shift"}
             </Link>
           </div>
         )}
@@ -496,7 +516,9 @@ export function CartPanel({
                 {activeOrderNumber ? "Menambahkan Item..." : "Menyimpan Pesanan..."}
               </>
             ) : !hasActiveShift ? (
-              "Buka Shift Terlebih Dahulu"
+              lockedByCashierLabel
+                ? "Shift Digunakan Kasir Lain"
+                : "Buka Shift Terlebih Dahulu"
             ) : activeOrderNumber ? (
               `Tambah ke #${activeOrderNumber} (+${formatRupiah(totals.grandTotal)})`
             ) : isDineIn && selectedTable?.status === "occupied" ? (

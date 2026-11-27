@@ -29,6 +29,11 @@ import type {
   OrderWithDetails,
   ProductWithModifiers,
 } from "@/lib/orders/types";
+import {
+  formatOnDutyCashierLabel,
+  isShiftLockedByOtherCashier,
+} from "@/lib/shifts/format";
+import type { GlobalActiveShiftStatus } from "@/lib/shifts/types";
 import { cn } from "@/lib/utils";
 import type {
   DiningTable,
@@ -49,6 +54,7 @@ export type PosContainerProps = {
   discounts?: Discount[];
   userRole?: string;
   activeShift?: Shift | null;
+  globalShiftStatus?: GlobalActiveShiftStatus | null;
 };
 
 export function PosContainer({
@@ -61,9 +67,19 @@ export function PosContainer({
   discounts = [],
   userRole = "kasir",
   activeShift = null,
+  globalShiftStatus = null,
 }: PosContainerProps) {
   const router = useRouter();
   const hasActiveShift = Boolean(activeShift && activeShift.status === "open");
+  const isShiftLockedByOther =
+    !hasActiveShift && isShiftLockedByOtherCashier(globalShiftStatus);
+  const onDutyCashierLabel = formatOnDutyCashierLabel(
+    globalShiftStatus?.cashierName,
+    globalShiftStatus?.cashierUsername,
+  );
+  const blockedShiftToastMessage = isShiftLockedByOther
+    ? `Shift kasir sedang digunakan oleh ${onDutyCashierLabel}. Tutup shift aktif tersebut terlebih dahulu sebelum membuat pesanan.`
+    : "Shift kasir belum dibuka. Buka shift terlebih dahulu sebelum memilih produk dan membuat pesanan.";
   const [tableStatusOverrides, setTableStatusOverrides] = useState<
     Record<string, TableStatus>
   >({});
@@ -184,9 +200,7 @@ export function PosContainer({
   // Handle selecting a product from catalog
   const handleSelectProduct = (product: ProductWithModifiers) => {
     if (!hasActiveShift) {
-      toast.error(
-        "Shift kasir belum dibuka. Buka shift terlebih dahulu sebelum memilih produk dan membuat pesanan.",
-      );
+      toast.error(blockedShiftToastMessage);
       return;
     }
 
@@ -210,9 +224,7 @@ export function PosContainer({
 
   const handleAddDirectProduct = (product: ProductWithModifiers) => {
     if (!hasActiveShift) {
-      toast.error(
-        "Shift kasir belum dibuka. Buka shift terlebih dahulu sebelum membuat pesanan.",
-      );
+      toast.error(blockedShiftToastMessage);
       return;
     }
     handleCartModification();
@@ -250,9 +262,7 @@ export function PosContainer({
 
   const handleAddToCart = (item: CartItem) => {
     if (!hasActiveShift) {
-      toast.error(
-        "Shift kasir belum dibuka. Buka shift terlebih dahulu sebelum membuat pesanan.",
-      );
+      toast.error(blockedShiftToastMessage);
       return;
     }
     handleCartModification();
@@ -328,9 +338,7 @@ export function PosContainer({
     if (cart.length === 0 || isSubmitting) return;
 
     if (!hasActiveShift) {
-      toast.error(
-        "Shift kasir belum dibuka atau sudah ditutup. Buka shift terlebih dahulu sebelum membuat pesanan.",
-      );
+      toast.error(blockedShiftToastMessage);
       return;
     }
 
@@ -476,6 +484,7 @@ export function PosContainer({
             orderNotes={orderNotes}
             isSubmitting={isSubmitting}
             hasActiveShift={hasActiveShift}
+            lockedByCashierLabel={isShiftLockedByOther ? onDutyCashierLabel : null}
             totals={totals}
             selectedOrderPromoName={selectedOrderPromo?.name}
             hasManualDiscount={manualDiscount !== null}
@@ -575,6 +584,7 @@ export function PosContainer({
         order={paymentOrder}
         isOpen={paymentOrder !== null}
         activeShift={activeShift}
+        globalShiftStatus={globalShiftStatus}
         onClose={() => {
           setPaymentOrder(null);
           router.refresh();

@@ -40,6 +40,20 @@ export type ShiftActionResult<T = unknown> = {
   fieldErrors?: Record<string, string>;
 };
 
+/**
+ * Status non-finansial shift aktif global (dipakai untuk menampilkan indikator
+ * kasir yang sedang bertugas dan mengunci pembukaan shift ganda di semua akun).
+ */
+export type GlobalActiveShiftStatus = {
+  hasActiveShift: boolean;
+  shiftId: string | null;
+  cashierId: string | null;
+  cashierName: string | null;
+  cashierUsername: string | null;
+  openedAt: string | null;
+  isOwnedByCurrentUser: boolean;
+};
+
 const uuidRegex =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 

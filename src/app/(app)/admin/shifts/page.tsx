@@ -11,6 +11,8 @@ import {
 import type { ShiftWithCashier } from "@/lib/shifts/types";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
+export const dynamic = "force-dynamic";
+
 export default async function AdminShiftsPage() {
   await requireRole(["admin"]);
 

@@ -58,12 +58,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { GlobalShiftSyncListener } from "@/components/pos/shift/global-shift-sync-listener";
 import {
   closeShiftAction,
   getCashMovementsAction,
   getShiftSummaryAction,
   openShiftAction,
 } from "@/lib/shifts/actions";
+import { broadcastGlobalShiftChanged } from "@/lib/shifts/realtime";
 import { exportShiftsCsvAction } from "@/lib/export/actions";
 import { downloadCsvInBrowser } from "@/lib/export/csv";
 import { getJakartaDateDaysAgo, getJakartaDateToday } from "@/lib/reports/calculations";
@@ -242,6 +244,13 @@ export function AdminShiftManager({
       return;
     }
 
+    if (activeShifts.length > 0) {
+      toast.error(
+        `Sudah ada shift kasir aktif atas nama ${activeShifts[0]?.cashier?.full_name || "kasir lain"}. Tutup shift tersebut terlebih dahulu.`,
+      );
+      return;
+    }
+
     if (openingCashInput < 0) {
       toast.error("Modal kas awal tidak boleh bernilai negatif.");
       return;
@@ -257,6 +266,7 @@ export function AdminShiftManager({
       if (res.ok && res.data) {
         toast.success(res.message);
         setIsOpenShiftOpen(false);
+        void broadcastGlobalShiftChanged();
         router.refresh();
       } else {
         toast.error(res.message || "Gagal membuka shift kasir.");
@@ -297,6 +307,7 @@ export function AdminShiftManager({
       if (res.ok && res.data) {
         toast.success(res.message);
         setShiftToClose(null);
+        void broadcastGlobalShiftChanged();
         router.refresh();
       } else {
         toast.error(res.message || "Gagal menutup shift kasir.");
@@ -379,6 +390,7 @@ export function AdminShiftManager({
 
   return (
     <div className="space-y-6">
+      <GlobalShiftSyncListener channelSuffix="admin-shifts" />
       {/* SECTION 1: METRIC SUMMARY CARDS */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
         <Card className="rounded-2xl border-primary/30 bg-primary/5 shadow-2xs">
@@ -440,25 +452,45 @@ export function AdminShiftManager({
                 Shift Kasir yang Sedang Berjalan (Aktif)
               </CardTitle>
               <CardDescription className="text-xs">
-                Monitoring laci kasir fisik yang saat ini melayani transaksi di POS
+                Monitoring laci kasir fisik aktif — maksimal 1 shift kasir aktif secara global pada satu waktu
               </CardDescription>
             </div>
 
-            {inactiveCashiers.length > 0 && (
-              <Button
-                size="sm"
-                onClick={() => {
-                  setSelectedCashierId(inactiveCashiers[0]?.id || "");
-                  setOpeningCashInput(200000);
-                  setOpeningNotes("");
-                  setIsOpenShiftOpen(true);
-                }}
-                className="text-xs font-semibold rounded-xl gap-1.5"
-              >
-                <PlusCircle className="size-3.5" />
-                Buka Shift untuk Kasir
-              </Button>
-            )}
+            {inactiveCashiers.length > 0 &&
+              (activeShifts.length === 0 ? (
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setSelectedCashierId(inactiveCashiers[0]?.id || "");
+                    setOpeningCashInput(200000);
+                    setOpeningNotes("");
+                    setIsOpenShiftOpen(true);
+                  }}
+                  className="text-xs font-semibold rounded-xl gap-1.5"
+                >
+                  <PlusCircle className="size-3.5" />
+                  Buka Shift untuk Kasir
+                </Button>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <Badge
+                    variant="secondary"
+                    className="rounded-lg text-[11px] font-medium gap-1 text-amber-800 bg-amber-100 border border-amber-300"
+                  >
+                    <Lock className="size-3" />
+                    Terkunci: 1 Shift Aktif Global
+                  </Badge>
+                  <Button
+                    size="sm"
+                    disabled
+                    title="Tutup shift aktif saat ini sebelum membuka shift untuk kasir lain."
+                    className="text-xs font-semibold rounded-xl gap-1.5"
+                  >
+                    <PlusCircle className="size-3.5" />
+                    Buka Shift untuk Kasir
+                  </Button>
+                </div>
+              ))}
           </div>
         </CardHeader>
 

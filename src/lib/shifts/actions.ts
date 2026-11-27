@@ -3,18 +3,168 @@
 import type { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { getCashierActor } from "@/lib/auth/session";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { formatOnDutyCashierLabel } from "./format";
 import {
   closeShiftSchema,
   openShiftSchema,
   recordCashMovementSchema,
   type CashMovement,
+  type GlobalActiveShiftStatus,
   type Shift,
   type ShiftActionResult,
   type ShiftStatus,
   type ShiftSummary,
   type ShiftWithCashier,
 } from "./types";
+
+type RawGlobalShiftRow = {
+  id: string;
+  cashier_id: string;
+  opened_at: string;
+  cashier?:
+    | { full_name?: string | null; username?: string | null }
+    | Array<{ full_name?: string | null; username?: string | null }>
+    | null;
+};
+
+type RpcGlobalShiftStatus = {
+  has_active_shift?: boolean;
+  shift_id?: string | null;
+  cashier_id?: string | null;
+  cashier_name?: string | null;
+  cashier_username?: string | null;
+  opened_at?: string | null;
+  is_owned_by_caller?: boolean;
+};
+
+function extractJoinedCashier(
+  relation: RawGlobalShiftRow["cashier"],
+): { full_name: string | null; username: string | null } {
+  const row = Array.isArray(relation) ? relation[0] : relation;
+  return {
+    full_name: row?.full_name?.trim() || null,
+    username: row?.username?.trim() || null,
+  };
+}
+
+function formatOpenShiftErrorMessage(
+  rawMessage: string,
+  code?: string,
+  fallbackStatus?: GlobalActiveShiftStatus | null,
+): string {
+  const prefix = "SHIFT_OCCUPIED_BY_OTHER_CASHIER:";
+  if (rawMessage.includes(prefix)) {
+    return rawMessage.slice(rawMessage.indexOf(prefix) + prefix.length).trim();
+  }
+  if (
+    code === "23505" ||
+    rawMessage.includes("idx_shifts_single_global_active")
+  ) {
+    if (fallbackStatus?.hasActiveShift && !fallbackStatus.isOwnedByCurrentUser) {
+      const label = formatOnDutyCashierLabel(
+        fallbackStatus.cashierName,
+        fallbackStatus.cashierUsername,
+      );
+      return `Tidak dapat membuka shift baru karena saat ini sudah ada shift aktif yang sedang digunakan oleh ${label}. Tutup shift tersebut terlebih dahulu.`;
+    }
+    return "Tidak dapat membuka shift baru karena masih terdapat shift kasir yang sedang aktif. Tutup shift aktif terlebih dahulu.";
+  }
+  return rawMessage;
+}
+
+async function readGlobalActiveShiftStatus(
+  supabase: NonNullable<Awaited<ReturnType<typeof createSupabaseServerClient>>>,
+  currentUserId: string,
+): Promise<GlobalActiveShiftStatus> {
+  const emptyStatus: GlobalActiveShiftStatus = {
+    hasActiveShift: false,
+    shiftId: null,
+    cashierId: null,
+    cashierName: null,
+    cashierUsername: null,
+    openedAt: null,
+    isOwnedByCurrentUser: false,
+  };
+
+  // 1. Gunakan adminClient jika tersedia agar status non-finansial dapat dibaca
+  //    lintas kasir tanpa melonggarkan RLS finansial pada tabel shifts.
+  const adminClient = createSupabaseAdminClient();
+  if (adminClient) {
+    const { data, error } = await adminClient
+      .from("shifts")
+      .select(
+        "id, cashier_id, opened_at, cashier:profiles!shifts_cashier_id_fkey(full_name, username)",
+      )
+      .eq("status", "open")
+      .order("opened_at", { ascending: true })
+      .limit(1);
+
+    if (!error && Array.isArray(data)) {
+      if (data.length > 0) {
+        const row = data[0] as unknown as RawGlobalShiftRow;
+        const joined = extractJoinedCashier(row.cashier);
+        return {
+          hasActiveShift: true,
+          shiftId: row.id,
+          cashierId: row.cashier_id,
+          cashierName: joined.full_name,
+          cashierUsername: joined.username,
+          openedAt: row.opened_at,
+          isOwnedByCurrentUser: row.cashier_id === currentUserId,
+        };
+      }
+      return emptyStatus;
+    }
+  }
+
+  // 2. Coba RPC SECURITY DEFINER non-finansial (jika migrasi sudah terpasang)
+  const { data: rpcData, error: rpcError } = await supabase.rpc(
+    "get_active_global_shift_status",
+  );
+  if (!rpcError && rpcData && typeof rpcData === "object") {
+    const res = rpcData as RpcGlobalShiftStatus;
+    if (res.has_active_shift) {
+      return {
+        hasActiveShift: true,
+        shiftId: res.shift_id ?? null,
+        cashierId: res.cashier_id ?? null,
+        cashierName: res.cashier_name ?? null,
+        cashierUsername: res.cashier_username ?? null,
+        openedAt: res.opened_at ?? null,
+        isOwnedByCurrentUser: res.cashier_id === currentUserId,
+      };
+    }
+    return emptyStatus;
+  }
+
+  // 3. Fallback session client (minimal mendeteksi shift milik sendiri / admin)
+  const { data: fallbackRows } = await supabase
+    .from("shifts")
+    .select(
+      "id, cashier_id, opened_at, cashier:profiles!shifts_cashier_id_fkey(full_name, username)",
+    )
+    .eq("status", "open")
+    .order("opened_at", { ascending: true })
+    .limit(1);
+
+  if (Array.isArray(fallbackRows) && fallbackRows.length > 0) {
+    const row = fallbackRows[0] as unknown as RawGlobalShiftRow;
+    const joined = extractJoinedCashier(row.cashier);
+    return {
+      hasActiveShift: true,
+      shiftId: row.id,
+      cashierId: row.cashier_id,
+      cashierName: joined.full_name,
+      cashierUsername: joined.username,
+      openedAt: row.opened_at,
+      isOwnedByCurrentUser: row.cashier_id === currentUserId,
+    };
+  }
+
+  return emptyStatus;
+}
 
 function firstZodError(error: z.ZodError): string {
   return error.issues[0]?.message ?? "Validasi data shift gagal.";
@@ -71,6 +221,29 @@ export async function openShiftAction(
 
   const targetCashierId =
     session.profile.role === "admin" && cashierId ? cashierId : null;
+  const effectiveTargetCashierId = targetCashierId || session.profile.id;
+
+  // Guard server-side: pastikan tidak ada shift aktif lain secara global
+  const globalStatus = await readGlobalActiveShiftStatus(
+    supabase,
+    session.profile.id,
+  );
+  if (globalStatus.hasActiveShift) {
+    if (globalStatus.cashierId === effectiveTargetCashierId) {
+      return {
+        ok: false,
+        message: `Kasir masih memiliki shift aktif yang belum ditutup (Shift ID: ${globalStatus.shiftId}). Tutup shift terlebih dahulu.`,
+      };
+    }
+    const holderLabel = formatOnDutyCashierLabel(
+      globalStatus.cashierName,
+      globalStatus.cashierUsername,
+    );
+    return {
+      ok: false,
+      message: `Tidak dapat membuka shift baru karena saat ini sudah ada shift aktif yang sedang digunakan oleh ${holderLabel}. Tutup shift tersebut terlebih dahulu.`,
+    };
+  }
 
   const { data: rpcData, error: rpcError } = await supabase.rpc(
     "open_shift_atomic",
@@ -82,11 +255,23 @@ export async function openShiftAction(
   );
 
   if (rpcError) {
-    return { ok: false, message: rpcError.message };
+    const latestStatus = await readGlobalActiveShiftStatus(
+      supabase,
+      session.profile.id,
+    );
+    return {
+      ok: false,
+      message: formatOpenShiftErrorMessage(
+        rpcError.message,
+        rpcError.code,
+        latestStatus,
+      ),
+    };
   }
 
   revalidatePath("/pos");
   revalidatePath("/pos/orders");
+  revalidatePath("/pos/floor");
   revalidatePath("/pos/shift");
   revalidatePath("/admin/shifts");
 
@@ -94,6 +279,36 @@ export async function openShiftAction(
     ok: true,
     message: "Shift kasir berhasil dibuka.",
     data: rpcData as unknown as Shift,
+  };
+}
+
+/**
+ * Mengambil status non-finansial shift aktif global agar setiap akun kasir
+ * dan admin mengetahui apakah sistem sedang dikunci oleh shift kasir lain.
+ */
+export async function getGlobalActiveShiftStatusAction(): Promise<
+  ShiftActionResult<GlobalActiveShiftStatus>
+> {
+  const actorRes = await getCashierActor();
+  if (!actorRes.ok) {
+    return { ok: false, message: actorRes.message };
+  }
+
+  const supabase = await createSupabaseServerClient();
+  if (!supabase) {
+    return { ok: false, message: "Klien database tidak tersedia." };
+  }
+
+  const status = await readGlobalActiveShiftStatus(
+    supabase,
+    actorRes.session.profile.id,
+  );
+  return {
+    ok: true,
+    message: status.hasActiveShift
+      ? "Shift aktif global ditemukan."
+      : "Tidak ada shift aktif global.",
+    data: status,
   };
 }
 
@@ -338,6 +553,7 @@ export async function closeShiftAction(
 
   revalidatePath("/pos");
   revalidatePath("/pos/orders");
+  revalidatePath("/pos/floor");
   revalidatePath("/pos/shift");
   revalidatePath("/admin/shifts");
 
@@ -408,6 +624,7 @@ export async function recordCashMovementAction(
 
   revalidatePath("/pos");
   revalidatePath("/pos/orders");
+  revalidatePath("/pos/floor");
   revalidatePath("/pos/shift");
   revalidatePath("/admin/shifts");
 

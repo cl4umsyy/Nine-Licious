@@ -12,6 +12,7 @@ import {
   MinusCircle,
   PlusCircle,
   Receipt,
+  RefreshCw,
   RotateCcw,
   ShieldCheck,
   TrendingUp,
@@ -51,13 +52,20 @@ import {
   openShiftAction,
   recordCashMovementAction,
 } from "@/lib/shifts/actions";
+import {
+  formatOnDutyCashierLabel,
+  isShiftLockedByOtherCashier,
+} from "@/lib/shifts/format";
+import { broadcastGlobalShiftChanged } from "@/lib/shifts/realtime";
 import type {
   CashMovement,
   CashMovementType,
+  GlobalActiveShiftStatus,
   ShiftSummary,
   ShiftWithCashier,
 } from "@/lib/shifts/types";
 import { cn } from "@/lib/utils";
+import { GlobalShiftSyncListener } from "./global-shift-sync-listener";
 
 const QUICK_OPENING_CASH = [100000, 200000, 300000, 500000];
 
@@ -106,6 +114,7 @@ export type CashierShiftManagerProps = {
   initialSummary: ShiftSummary | null;
   initialMovements: CashMovement[];
   initialHistory: ShiftWithCashier[];
+  initialGlobalShiftStatus?: GlobalActiveShiftStatus | null;
 };
 
 export function CashierShiftManager({
@@ -113,6 +122,7 @@ export function CashierShiftManager({
   initialSummary: summary,
   initialMovements: movements,
   initialHistory: history,
+  initialGlobalShiftStatus: globalShiftStatus = null,
 }: CashierShiftManagerProps) {
   const router = useRouter();
   // Dialog States
@@ -134,9 +144,21 @@ export function CashierShiftManager({
   const [isPending, startTransition] = useTransition();
 
   const activeShift = summary?.shift ?? null;
+  const lockedByOtherCashier = !activeShift && isShiftLockedByOtherCashier(globalShiftStatus);
+  const onDutyCashierLabel = formatOnDutyCashierLabel(
+    globalShiftStatus?.cashierName,
+    globalShiftStatus?.cashierUsername,
+  );
 
   // Handler Buka Shift
   const handleOpenShift = () => {
+    if (lockedByOtherCashier) {
+      toast.error(
+        `Tidak dapat membuka shift baru karena saat ini shift sedang digunakan oleh ${onDutyCashierLabel}.`,
+      );
+      return;
+    }
+
     if (openingCashInput < 0) {
       toast.error("Modal kas awal tidak boleh bernilai negatif.");
       return;
@@ -151,10 +173,12 @@ export function CashierShiftManager({
       if (res.ok && res.data) {
         toast.success(res.message);
         setIsOpenShiftOpen(false);
+        void broadcastGlobalShiftChanged();
         // Refresh server components untuk sinkronisasi state
         router.refresh();
       } else {
         toast.error(res.message || "Gagal membuka shift kasir.");
+        router.refresh();
       }
     });
   };
@@ -231,6 +255,7 @@ export function CashierShiftManager({
       if (res.ok && res.data) {
         toast.success(res.message);
         setIsCloseShiftOpen(false);
+        void broadcastGlobalShiftChanged();
         router.refresh();
       } else {
         toast.error(res.message || "Gagal menutup shift.");
@@ -243,35 +268,81 @@ export function CashierShiftManager({
 
   return (
     <div className="space-y-6">
-      {/* SECTION 1: STATUS SHIFT AKTIF ATAU EMPTY STATE */}
+      <GlobalShiftSyncListener channelSuffix="pos-shift" />
+
+      {/* SECTION 1: STATUS SHIFT AKTIF ATAU EMPTY / LOCKED STATE */}
       {!activeShift ? (
-        <Card className="border-amber-500/30 bg-amber-500/5">
-          <CardHeader className="text-center sm:text-left">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div className="space-y-1">
-                <CardTitle className="text-lg font-bold flex items-center gap-2 justify-center sm:justify-start">
-                  <Wallet className="size-5 text-amber-600" />
-                  Shift Kasir Belum Dibuka
-                </CardTitle>
-                <CardDescription className="text-xs">
-                  Anda sedang login sebagai <strong>{currentCashier.full_name}</strong> (@{currentCashier.username}).
-                  Untuk mulai melayani transaksi pembayaran tunai di POS, buka shift terlebih dahulu.
-                </CardDescription>
+        lockedByOtherCashier ? (
+          <Card className="border-rose-500/35 bg-rose-500/5">
+            <CardHeader className="text-center sm:text-left">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="space-y-1.5">
+                  <CardTitle className="text-lg font-bold flex items-center gap-2 justify-center sm:justify-start text-rose-900 dark:text-rose-200">
+                    <Lock className="size-5 text-rose-600" />
+                    Shift Kasir Sedang Digunakan
+                  </CardTitle>
+                  <CardDescription className="text-xs leading-relaxed text-rose-900/90 dark:text-rose-200/90">
+                    Shift aktif saat ini sedang digunakan oleh{" "}
+                    <strong>{onDutyCashierLabel}</strong>
+                    {globalShiftStatus?.openedAt
+                      ? ` (dibuka pada ${formatDate(globalShiftStatus.openedAt)})`
+                      : ""}
+                    . Nine Licious hanya mengizinkan satu shift kasir aktif secara global dalam satu waktu.
+                    Anda dapat membuka shift baru setelah shift aktif tersebut ditutup.
+                  </CardDescription>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 justify-center sm:justify-end shrink-0">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => router.refresh()}
+                    className="rounded-xl text-xs font-semibold gap-1.5"
+                  >
+                    <RefreshCw className="size-3.5" />
+                    Segarkan Status
+                  </Button>
+                  <Button
+                    type="button"
+                    disabled
+                    className="rounded-xl text-xs font-bold gap-1.5"
+                  >
+                    <Lock className="size-3.5" />
+                    Shift Digunakan Kasir Lain
+                  </Button>
+                </div>
               </div>
-              <Button
-                onClick={() => {
-                  setOpeningCashInput(200000);
-                  setOpeningNotes("");
-                  setIsOpenShiftOpen(true);
-                }}
-                className="bg-amber-600 hover:bg-amber-700 text-white font-bold gap-2 rounded-xl"
-              >
-                <PlusCircle className="size-4" />
-                Buka Shift Sekarang
-              </Button>
-            </div>
-          </CardHeader>
-        </Card>
+            </CardHeader>
+          </Card>
+        ) : (
+          <Card className="border-amber-500/30 bg-amber-500/5">
+            <CardHeader className="text-center sm:text-left">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <CardTitle className="text-lg font-bold flex items-center gap-2 justify-center sm:justify-start">
+                    <Wallet className="size-5 text-amber-600" />
+                    Shift Kasir Belum Dibuka
+                  </CardTitle>
+                  <CardDescription className="text-xs">
+                    Anda sedang login sebagai <strong>{currentCashier.full_name}</strong> (@{currentCashier.username}).
+                    Untuk mulai melayani transaksi pembayaran tunai di POS, buka shift terlebih dahulu.
+                  </CardDescription>
+                </div>
+                <Button
+                  onClick={() => {
+                    setOpeningCashInput(200000);
+                    setOpeningNotes("");
+                    setIsOpenShiftOpen(true);
+                  }}
+                  className="bg-amber-600 hover:bg-amber-700 text-white font-bold gap-2 rounded-xl"
+                >
+                  <PlusCircle className="size-4" />
+                  Buka Shift Sekarang
+                </Button>
+              </div>
+            </CardHeader>
+          </Card>
+        )
       ) : (
         <div className="space-y-4">
           {/* Header Card Shift Aktif */}

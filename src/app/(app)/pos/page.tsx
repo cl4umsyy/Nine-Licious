@@ -10,6 +10,7 @@ import {
 import { PageHeader } from "@/components/page-header";
 import { PendingServingPanel } from "@/components/pos/pending-serving-panel";
 import { PosContainer } from "@/components/pos/pos-container";
+import { GlobalShiftSyncListener } from "@/components/pos/shift/global-shift-sync-listener";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,6 +23,12 @@ import type {
   ProductModifierGroupWithDetails,
   ProductWithModifiers,
 } from "@/lib/orders/types";
+import { getGlobalActiveShiftStatusAction } from "@/lib/shifts/actions";
+import {
+  formatOnDutyCashierLabel,
+  isShiftLockedByOtherCashier,
+} from "@/lib/shifts/format";
+import type { GlobalActiveShiftStatus } from "@/lib/shifts/types";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import type {
@@ -36,6 +43,8 @@ import type {
   TableZone,
 } from "@/types/database";
 
+export const dynamic = "force-dynamic";
+
 export default async function PosPage() {
   const session = await requireRole(["admin", "kasir"]);
   const supabase = await createSupabaseServerClient();
@@ -46,6 +55,7 @@ export default async function PosPage() {
   let zones: TableZone[] = [];
   let discounts: Discount[] = [];
   let activeShift: Shift | null = null;
+  let globalShiftStatus: GlobalActiveShiftStatus | null = null;
   let taxPercent = 10;
   let serviceChargePercent = 5;
   let loadError: string | null = null;
@@ -72,6 +82,7 @@ export default async function PosPage() {
         discountsRes,
         pendingServingRes,
         shiftRes,
+        globalShiftRes,
       ] = await Promise.all([
         supabase
           .from("menu_categories")
@@ -129,10 +140,15 @@ export default async function PosPage() {
           .eq("cashier_id", session.profile.id)
           .eq("status", "open")
           .maybeSingle(),
+        getGlobalActiveShiftStatusAction(),
       ]);
 
       if (shiftRes?.data) {
         activeShift = shiftRes.data as unknown as Shift;
+      }
+
+      if (globalShiftRes?.ok && globalShiftRes.data) {
+        globalShiftStatus = globalShiftRes.data;
       }
 
       if (pendingServingRes.ok && pendingServingRes.data) {
@@ -222,8 +238,25 @@ export default async function PosPage() {
     }
   }
 
+  const isLockedByOther =
+    !activeShift && isShiftLockedByOtherCashier(globalShiftStatus);
+  const shiftButtonLabel = activeShift ? "Shift Aktif" : "Buka Shift";
+  const onDutyCashierLabel = formatOnDutyCashierLabel(
+    globalShiftStatus?.cashierName,
+    globalShiftStatus?.cashierUsername,
+  );
+  const openedAtLabel = globalShiftStatus?.openedAt
+    ? new Intl.DateTimeFormat("id-ID", {
+        timeZone: "Asia/Jakarta",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).format(new Date(globalShiftStatus.openedAt))
+    : null;
+
   return (
     <div className="flex flex-col space-y-3.5 pb-8">
+      <GlobalShiftSyncListener channelSuffix="pos-main" />
       <PageHeader
         title="POS Utama"
         className="shrink-0 py-0"
@@ -257,12 +290,16 @@ export default async function PosPage() {
               variant={activeShift ? "outline" : "default"}
               size="sm"
               className={`h-8.5 px-3 text-xs font-semibold rounded-xl ${
-                !activeShift ? "bg-amber-600 hover:bg-amber-700 text-white font-bold" : ""
+                !activeShift
+                  ? isLockedByOther
+                    ? "bg-rose-600 hover:bg-rose-700 text-white font-bold"
+                    : "bg-amber-600 hover:bg-amber-700 text-white font-bold"
+                  : ""
               }`}
             >
               <Link href="/pos/shift">
                 <Wallet className="size-3.5 mr-1.5" />
-                {activeShift ? "Shift Aktif" : "Buka Shift"}
+                {isLockedByOther ? "Shift Digunakan" : shiftButtonLabel}
               </Link>
             </Button>
             <Badge
@@ -280,20 +317,44 @@ export default async function PosPage() {
       ) : null}
 
       {!loadError && !activeShift ? (
-        <Alert className="border-amber-500/40 bg-amber-500/10 text-amber-950 dark:text-amber-100 py-2.5 px-3.5">
-          <Wallet className="size-4 text-amber-600 dark:text-amber-400 mt-0.5" />
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 w-full">
-            <div>
-              <AlertTitle className="text-xs font-bold">Shift Kasir Belum Dibuka</AlertTitle>
-              <AlertDescription className="text-[11px] text-amber-900/90 dark:text-amber-200/90">
-                Anda belum membuka shift kasir. Buka shift terlebih dahulu sebelum memilih produk, membuat pesanan, atau memproses pembayaran tunai.
-              </AlertDescription>
+        isLockedByOther ? (
+          <Alert className="border-rose-500/40 bg-rose-500/10 text-rose-950 dark:text-rose-100 py-2.5 px-3.5">
+            <Wallet className="size-4 text-rose-600 dark:text-rose-400 mt-0.5" />
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 w-full">
+              <div>
+                <AlertTitle className="text-xs font-bold">
+                  Shift Digunakan oleh {onDutyCashierLabel}
+                </AlertTitle>
+                <AlertDescription className="text-[11px] text-rose-900/90 dark:text-rose-200/90">
+                  {openedAtLabel ? `Dibuka pukul ${openedAtLabel} WIB. ` : ""}
+                  Hanya 1 shift kasir yang boleh aktif secara global. Tutup shift aktif tersebut sebelum membuka shift baru atau membuat pesanan dan pembayaran tunai.
+                </AlertDescription>
+              </div>
+              <Button
+                asChild
+                size="sm"
+                className="h-7.5 px-3 text-xs font-bold shrink-0 bg-rose-600 hover:bg-rose-700 text-white rounded-lg"
+              >
+                <Link href="/pos/shift">Lihat Status Shift</Link>
+              </Button>
             </div>
-            <Button asChild size="sm" className="h-7.5 px-3 text-xs font-bold shrink-0 bg-amber-600 hover:bg-amber-700 text-white rounded-lg">
-              <Link href="/pos/shift">Buka Shift Sekarang</Link>
-            </Button>
-          </div>
-        </Alert>
+          </Alert>
+        ) : (
+          <Alert className="border-amber-500/40 bg-amber-500/10 text-amber-950 dark:text-amber-100 py-2.5 px-3.5">
+            <Wallet className="size-4 text-amber-600 dark:text-amber-400 mt-0.5" />
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 w-full">
+              <div>
+                <AlertTitle className="text-xs font-bold">Shift Kasir Belum Dibuka</AlertTitle>
+                <AlertDescription className="text-[11px] text-amber-900/90 dark:text-amber-200/90">
+                  Anda belum membuka shift kasir. Buka shift terlebih dahulu sebelum memilih produk, membuat pesanan, atau memproses pembayaran tunai.
+                </AlertDescription>
+              </div>
+              <Button asChild size="sm" className="h-7.5 px-3 text-xs font-bold shrink-0 bg-amber-600 hover:bg-amber-700 text-white rounded-lg">
+                <Link href="/pos/shift">Buka Shift Sekarang</Link>
+              </Button>
+            </div>
+          </Alert>
+        )
       ) : null}
 
       {loadError ? (
@@ -330,6 +391,7 @@ export default async function PosPage() {
           discounts={discounts}
           userRole={session.profile.role}
           activeShift={activeShift}
+          globalShiftStatus={globalShiftStatus}
         />
       )}
     </div>

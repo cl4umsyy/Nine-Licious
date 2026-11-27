@@ -141,7 +141,7 @@ function resetDb() {
   currentActor = { ...db.profiles[0] };
 }
 
-function makeQuery(tableName) {
+function makeQuery(tableName, bypassRls = false) {
   const filters = [];
   let op = "select";
   let selectOpts = {};
@@ -215,7 +215,7 @@ function makeQuery(tableName) {
     }
 
     let rows = table;
-    if (tableName === "shifts" && currentActor.role !== "admin") {
+    if (!bypassRls && tableName === "shifts" && currentActor.role !== "admin") {
       rows = rows.filter((s) => s.cashier_id === currentActor.id);
     }
 
@@ -339,8 +339,42 @@ function reserveStockInMock(orderId) {
 }
 
 const supabaseMock = {
-  from: (tableName) => makeQuery(tableName),
+  from: (tableName) => makeQuery(tableName, false),
   rpc: async (fnName, args = {}) => {
+    if (fnName === "get_active_global_shift_status") {
+      if (!["admin", "kasir"].includes(currentActor.role)) {
+        return { data: null, error: { message: "Hanya admin dan kasir yang dapat memeriksa status shift aktif." } };
+      }
+      const openShift = db.shifts.find((s) => s.status === "open");
+      if (!openShift) {
+        return {
+          data: {
+            has_active_shift: false,
+            shift_id: null,
+            cashier_id: null,
+            cashier_name: null,
+            cashier_username: null,
+            opened_at: null,
+            is_owned_by_caller: false,
+          },
+          error: null,
+        };
+      }
+      const prof = db.profiles.find((p) => p.id === openShift.cashier_id);
+      return {
+        data: {
+          has_active_shift: true,
+          shift_id: openShift.id,
+          cashier_id: openShift.cashier_id,
+          cashier_name: prof?.full_name ?? null,
+          cashier_username: prof?.username ?? null,
+          opened_at: openShift.opened_at,
+          is_owned_by_caller: openShift.cashier_id === currentActor.id,
+        },
+        error: null,
+      };
+    }
+
     if (fnName === "open_shift_atomic") {
       if (!["admin", "kasir"].includes(currentActor.role)) {
         return { data: null, error: { message: "Hanya Admin dan Kasir yang dapat membuka shift." } };
@@ -349,14 +383,22 @@ const supabaseMock = {
       if (targetCashierId !== currentActor.id && currentActor.role !== "admin") {
         return { data: null, error: { message: "Kasir hanya dapat membuka shift untuk dirinya sendiri." } };
       }
-      const existingOpen = db.shifts.find(
-        (s) => s.cashier_id === targetCashierId && s.status === "open",
-      );
-      if (existingOpen) {
+      const existingAnyOpen = db.shifts.find((s) => s.status === "open");
+      if (existingAnyOpen) {
+        if (existingAnyOpen.cashier_id === targetCashierId) {
+          return {
+            data: null,
+            error: {
+              message: `Kasir masih memiliki shift aktif yang belum ditutup (Shift ID: ${existingAnyOpen.id}). Tutup shift terlebih dahulu.`,
+            },
+          };
+        }
+        const activeProf = db.profiles.find((p) => p.id === existingAnyOpen.cashier_id);
         return {
           data: null,
           error: {
-            message: `Kasir masih memiliki shift aktif yang belum ditutup (Shift ID: ${existingOpen.id}). Tutup shift terlebih dahulu.`,
+            code: "23505",
+            message: `SHIFT_OCCUPIED_BY_OTHER_CASHIER: Shift kasir aktif sedang digunakan oleh ${activeProf?.full_name || "kasir lain"}. Tutup shift tersebut terlebih dahulu.`,
           },
         };
       }
@@ -671,6 +713,11 @@ const supabaseMock = {
   },
 };
 
+const supabaseAdminMock = {
+  from: (tableName) => makeQuery(tableName, true),
+  rpc: supabaseMock.rpc,
+};
+
 const moduleMocks = {
   "server-only": {},
   "next/cache": { revalidatePath: () => {} },
@@ -708,7 +755,7 @@ const moduleMocks = {
     },
   },
   "@/lib/supabase/admin": {
-    createSupabaseAdminClient: () => supabaseMock,
+    createSupabaseAdminClient: () => supabaseAdminMock,
   },
   "@/lib/supabase/server": {
     createSupabaseServerClient: async () => supabaseMock,
@@ -1146,7 +1193,7 @@ await testCase("8. Pembayaran Midtrans tetap berjalan tanpa shift aktif (aturan 
 await testCase("9 & 10. Admin tetap bisa membuka dan menutup shift (milik sendiri maupun milik kasir lain)", async () => {
   currentActor = { ...db.profiles.find((p) => p.id === USER_ADMIN_1) };
 
-  // Admin opens shift for Kasir 1
+  // Admin membuka shift untuk Kasir 1
   const openKasirShift = await shiftsActions.openShiftAction({
     cashierId: USER_KASIR_1,
     openingCash: 250000,
@@ -1156,15 +1203,15 @@ await testCase("9 & 10. Admin tetap bisa membuka dan menutup shift (milik sendir
   assert.equal(openKasirShift.data.cashier_id, USER_KASIR_1);
   assert.match(openKasirShift.data.notes, /\[Dibuka oleh Admin: admin1\]/);
 
-  // Admin opens own shift
-  const openAdminOwnShift = await shiftsActions.openShiftAction({
+  // Aturan Single Global Active Shift: Admin tidak boleh membuka shift kedua saat shift Kasir 1 masih open
+  const blockedSecondShift = await shiftsActions.openShiftAction({
     openingCash: 150000,
-    notes: "Shift Admin",
+    notes: "Shift Admin ganda",
   });
-  assert.equal(openAdminOwnShift.ok, true, openAdminOwnShift.message);
-  assert.equal(openAdminOwnShift.data.cashier_id, USER_ADMIN_1);
+  assert.equal(blockedSecondShift.ok, false);
+  assert.match(blockedSecondShift.message, /sedang digunakan oleh/i);
 
-  // Admin closes Kasir 1's shift
+  // Admin menutup shift Kasir 1 terlebih dahulu
   const closeKasirShift = await shiftsActions.closeShiftAction({
     shiftId: openKasirShift.data.id,
     actualCash: 250000,
@@ -1173,7 +1220,15 @@ await testCase("9 & 10. Admin tetap bisa membuka dan menutup shift (milik sendir
   assert.equal(closeKasirShift.ok, true, closeKasirShift.message);
   assert.equal(closeKasirShift.data.status, "closed");
 
-  // Admin closes Admin own shift
+  // Setelah shift sebelumnya ditutup, Admin bisa membuka shift baru (milik Admin)
+  const openAdminOwnShift = await shiftsActions.openShiftAction({
+    openingCash: 150000,
+    notes: "Shift Admin",
+  });
+  assert.equal(openAdminOwnShift.ok, true, openAdminOwnShift.message);
+  assert.equal(openAdminOwnShift.data.cashier_id, USER_ADMIN_1);
+
+  // Admin menutup shift miliknya sendiri
   const closeAdminOwnShift = await shiftsActions.closeShiftAction({
     shiftId: openAdminOwnShift.data.id,
     actualCash: 150000,
@@ -1346,7 +1401,21 @@ await testCase("15. Kasir mencoba mengirim shift_id/shiftId milik kasir lain -> 
   assert.equal(spoofNoOwnShift.errorCode, "SHIFT_NOT_OPEN");
   assert.equal(db.createOrderRpcCalls, 0);
 
-  // Kasir 1 membuka shift miliknya sendiri, lalu mencoba spoofing shift_id/shiftId Kasir 2 -> TETAP DITOLAK
+  // Kasir 1 tanpa shift aktif mencoba membuka shift bersamaan saat Kasir 2 aktif -> DITOLAK oleh single global active shift
+  const blockedConcurrentK1 = await shiftsActions.openShiftAction({ openingCash: 250000 });
+  assert.equal(blockedConcurrentK1.ok, false);
+  assert.match(blockedConcurrentK1.message, /sedang digunakan oleh/i);
+
+  // Admin menutup shift Kasir 2 terlebih dahulu sebelum Kasir 1 dapat membuka shift miliknya
+  currentActor = { ...db.profiles.find((p) => p.id === USER_ADMIN_1) };
+  const closeK2BeforeK1 = await shiftsActions.closeShiftAction({
+    shiftId: shiftK2Id,
+    actualCash: 400000,
+  });
+  assert.equal(closeK2BeforeK1.ok, true, closeK2BeforeK1.message);
+
+  // Kasir 1 membuka shift miliknya sendiri setelah shift Kasir 2 ditutup, lalu mencoba spoofing shift_id/shiftId Kasir 2 -> TETAP DITOLAK
+  currentActor = { ...db.profiles.find((p) => p.id === USER_KASIR_1) };
   const shiftK1Res = await shiftsActions.openShiftAction({ openingCash: 250000 });
   assert.equal(shiftK1Res.ok, true, shiftK1Res.message);
   const shiftK1Id = shiftK1Res.data.id;

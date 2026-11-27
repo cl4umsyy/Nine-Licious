@@ -61,6 +61,7 @@ import {
 } from "@/lib/orders/cashier-orders-actions";
 import { confirmOrderServedAction } from "@/lib/orders/serving-actions";
 import type { OrderWithDetails } from "@/lib/orders/types";
+import type { GlobalActiveShiftStatus } from "@/lib/shifts/types";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import type { OrderType, Shift } from "@/types/database";
@@ -71,6 +72,7 @@ type CashierOrdersBoardProps = {
   currentUserId?: string;
   initialError?: string | null;
   activeShift?: Shift | null;
+  globalShiftStatus?: GlobalActiveShiftStatus | null;
 };
 
 type ConnectionState = "connecting" | "connected" | "polling";
@@ -113,6 +115,7 @@ export function CashierOrdersBoard({
   currentUserId,
   initialError = null,
   activeShift,
+  globalShiftStatus = null,
 }: CashierOrdersBoardProps) {
   const [orders, setOrders] = useState<CashierOrderListItem[]>(() =>
     mergeCashierOrdersById(initialData.orders),
@@ -948,6 +951,7 @@ export function CashierOrdersBoard({
         order={paymentOrder}
         isOpen={paymentOrder !== null}
         activeShift={activeShift}
+        globalShiftStatus={globalShiftStatus}
         onClose={() => {
           setPaymentOrder(null);
           void syncOrders({ manual: false });
