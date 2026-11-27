@@ -263,6 +263,7 @@ export async function exportTransactionsCsvAction(
         "id, order_number, queue_number, business_date, order_type, table_id, customer_name, status, payment_status, subtotal, discount_total, tax_total, service_total, grand_total, paid_total, refunded_total, notes, created_by, created_at",
         { count: "exact" },
       )
+      .neq("order_kind", "replacement")
       .order("created_at", { ascending: false })
       .limit(10000);
 
@@ -335,7 +336,7 @@ export async function exportTransactionsCsvAction(
       ? supabase.from("profiles").select("id, full_name, username").in("id", cashierIds)
       : { data: [] },
     tableIds.length > 0
-      ? supabase.from("tables").select("id, table_number").in("id", tableIds)
+      ? supabase.from("dining_tables").select("id, name").in("id", tableIds)
       : { data: [] },
     orderIds.length > 0
       ? supabase.from("payments").select("order_id, payment_method, payment_status").in("order_id", orderIds)
@@ -348,8 +349,8 @@ export async function exportTransactionsCsvAction(
   }
 
   const tableMap = new Map<string, string>();
-  for (const t of tablesRes.data || []) {
-    tableMap.set(t.id, t.table_number);
+  for (const t of (tablesRes.data || []) as Array<{ id: string; name: string }>) {
+    tableMap.set(t.id, t.name);
   }
 
   const paymentsMap = new Map<string, string[]>();

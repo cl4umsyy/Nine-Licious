@@ -112,6 +112,10 @@ export type RefundReportItem = {
   amount: number;
   reason: string;
   refundType: "full" | "partial";
+  resolutionType?: "full_refund" | "partial_refund" | "replacement";
+  reasonCategory?: string;
+  approvalStatus?: string;
+  payoutStatus?: string;
   refundMethod: string;
   status: string;
   approvedAt: string | null;

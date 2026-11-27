@@ -11,7 +11,7 @@ import type { PaginatedTransactionsResult } from "@/lib/transactions/types";
 export const dynamic = "force-dynamic";
 
 export default async function AdminTransactionsPage() {
-  await requireRole(["admin"]);
+  const session = await requireRole(["admin"]);
 
   const supabase = await createSupabaseServerClient();
   let initialData: PaginatedTransactionsResult = {
@@ -57,7 +57,12 @@ export default async function AdminTransactionsPage() {
         description="Pencarian riwayat pesanan, audit rincian pembayaran & split bill, penelusuran refund, dan rekonsiliasi laci shift kasir."
       />
 
-      <TransactionHistory initialData={initialData} cashiers={cashiers} />
+      <TransactionHistory
+        initialData={initialData}
+        cashiers={cashiers}
+        userRole={session.profile.role}
+        currentUserId={session.profile.id}
+      />
     </div>
   );
 }

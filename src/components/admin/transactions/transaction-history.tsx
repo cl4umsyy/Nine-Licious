@@ -68,6 +68,13 @@ import {
   getAdminTransactionDetailAction,
   getAdminTransactionsAction,
 } from "@/lib/transactions/actions";
+import { RefundRequestModal } from "@/components/pos/refund-request-modal";
+import { RefundManagementPanel } from "@/components/refunds/refund-management-panel";
+import {
+  APPROVAL_STATUS_LABELS,
+  PAYOUT_STATUS_LABELS,
+  REFUND_RESOLUTION_LABELS,
+} from "@/lib/refunds/types";
 import { exportTransactionsCsvAction } from "@/lib/export/actions";
 import { downloadCsvInBrowser } from "@/lib/export/csv";
 import { toast } from "sonner";
@@ -92,6 +99,8 @@ export type CashierProfile = {
 interface TransactionHistoryProps {
   initialData: PaginatedTransactionsResult;
   cashiers: CashierProfile[];
+  userRole?: string;
+  currentUserId?: string;
 }
 
 function formatRupiah(amount: number): string {
@@ -123,7 +132,14 @@ function formatDateTime(isoString: string | null | undefined): string {
 export function TransactionHistory({
   initialData,
   cashiers,
+  userRole = "admin",
+  currentUserId,
 }: TransactionHistoryProps) {
+  const [viewMode, setViewMode] = useState<"transactions" | "refunds">(
+    "transactions",
+  );
+  const [focusRefundId, setFocusRefundId] = useState<string | null>(null);
+  const [refundOrderId, setRefundOrderId] = useState<string | null>(null);
   const [data, setData] = useState<PaginatedTransactionsResult>(initialData);
   const [isPending, startTransition] = useTransition();
   const [isLoading, setIsLoading] = useState(false);
@@ -146,7 +162,25 @@ export function TransactionHistory({
   const isFirstMount = useRef(true);
   const requestIdRef = useRef(0);
 
-  // Debounce search input (400ms)
+  // Debounce search input (400ms) & read deep link query (?tab=refunds&refundId=...)
+  useEffect(() => {
+    let urlTimer: ReturnType<typeof setTimeout> | null = null;
+    if (typeof window !== "undefined") {
+      const sp = new URLSearchParams(window.location.search);
+      const tab = sp.get("tab");
+      const rid = sp.get("refundId");
+      if (tab === "refunds" || rid) {
+        urlTimer = setTimeout(() => {
+          setViewMode("refunds");
+          if (rid) setFocusRefundId(rid);
+        }, 0);
+      }
+    }
+    return () => {
+      if (urlTimer) clearTimeout(urlTimer);
+    };
+  }, []);
+
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearch(search);
@@ -320,6 +354,45 @@ export function TransactionHistory({
 
   return (
     <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="inline-flex rounded-xl border bg-muted/40 p-0.5">
+          <button
+            type="button"
+            onClick={() => setViewMode("transactions")}
+            className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
+              viewMode === "transactions"
+                ? "bg-background text-foreground shadow-2xs"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Riwayat Transaksi
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode("refunds")}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
+              viewMode === "refunds"
+                ? "bg-background text-foreground shadow-2xs"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <RotateCcw className="size-3.5" />
+            Antrean &amp; Manajemen Refund
+          </button>
+        </div>
+      </div>
+
+      {viewMode === "refunds" ? (
+        <RefundManagementPanel
+          userRole={userRole}
+          currentUserId={currentUserId}
+          initialFocusRefundId={focusRefundId}
+          onMutated={() => {
+            setCurrentPage(1);
+          }}
+        />
+      ) : (
+        <>
       {/* SECTION 1: METRIC KPI SUMMARY */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
         <Card className="rounded-2xl border-primary/30 bg-primary/5 shadow-2xs">
@@ -1448,9 +1521,28 @@ export function TransactionHistory({
                 </div>
               )}
 
-              {/* TAB 3: RIWAYAT REFUND F2.4 */}
+              {/* TAB 3: RIWAYAT REFUND F2.4 & R1-R5 */}
               {activeDetailTab === "refunds" && (
                 <div className="space-y-4">
+                  {(detailData.order.status === "paid" ||
+                    detailData.order.status === "completed") &&
+                  detailData.order.paidTotal > 0 ? (
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-primary/20 bg-primary/5 p-3 text-xs">
+                      <span className="font-medium text-foreground">
+                        Kelola pengajuan refund penuh/parsial atau menu replacement (R1–R5).
+                      </span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => setRefundOrderId(detailData.order.id)}
+                        className="h-8 rounded-xl text-xs gap-1.5"
+                      >
+                        <RotateCcw className="size-3.5" />
+                        Ajukan Refund / Replacement
+                      </Button>
+                    </div>
+                  ) : null}
+
                   {detailData.refunds.length === 0 ? (
                     <div className="p-10 text-center space-y-2 border rounded-xl bg-muted/20">
                       <CheckCircle2 className="size-7 text-muted-foreground mx-auto" />
@@ -1462,80 +1554,124 @@ export function TransactionHistory({
                       </p>
                     </div>
                   ) : (
-                    <div className="border rounded-xl overflow-hidden bg-card">
-                      <div className="overflow-x-auto">
-                        <Table className="w-full">
-                          <TableHeader className="bg-muted/40 text-xs">
-                            <TableRow>
-                              <TableHead className="min-w-[140px] whitespace-nowrap">Nomor Refund</TableHead>
-                              <TableHead className="whitespace-nowrap">Tipe &amp; Metode</TableHead>
-                              <TableHead className="text-right whitespace-nowrap">Nominal Refund</TableHead>
-                              <TableHead className="min-w-[160px]">Alasan</TableHead>
-                              <TableHead className="min-w-[160px]">Diajukan &amp; Disetujui</TableHead>
-                              <TableHead className="text-center whitespace-nowrap">Status</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody className="text-xs font-medium">
-                            {detailData.refunds.map((r) => (
-                              <TableRow key={r.id} className="hover:bg-muted/20">
-                                <TableCell className="font-mono font-bold text-foreground whitespace-nowrap">
-                                  {r.refundNumber}
-                                </TableCell>
-                                <TableCell className="whitespace-nowrap">
-                                  <div className="space-y-0.5">
-                                    <Badge
-                                      variant="outline"
-                                      className="bg-muted font-semibold uppercase text-[10px]"
-                                    >
-                                      {r.refundType}
-                                    </Badge>
-                                    <p className="text-[11px] text-muted-foreground capitalize">
-                                      {r.refundMethod}
-                                    </p>
-                                  </div>
-                                </TableCell>
-                                <TableCell className="text-right font-mono font-bold text-rose-600 whitespace-nowrap">
-                                  {formatRupiah(r.amount)}
-                                </TableCell>
-                                <TableCell className="max-w-[200px] truncate" title={r.reason}>
-                                  {r.reason}
-                                </TableCell>
-                                <TableCell>
-                                  <p className="font-bold text-foreground">Oleh: {r.requesterName}</p>
-                                  {r.approverName && (
-                                    <p className="text-[11px] text-muted-foreground">
-                                      Disetujui: {r.approverName} ({formatDateTime(r.approvedAt)})
-                                    </p>
-                                  )}
-                                </TableCell>
-                                <TableCell className="text-center whitespace-nowrap">
-                                  {r.status === "completed" ? (
-                                    <Badge
-                                      variant="outline"
-                                      className="bg-emerald-50 text-emerald-700 border-emerald-300 font-semibold"
-                                    >
-                                      Selesai (Completed)
-                                    </Badge>
-                                  ) : r.status === "pending" ? (
-                                    <Badge
-                                      variant="outline"
-                                      className="bg-amber-50 text-amber-700 border-amber-300 font-semibold"
-                                    >
-                                      Menunggu Persetujuan
-                                    </Badge>
-                                  ) : (
-                                    <Badge
-                                      variant="outline"
-                                      className="bg-rose-50 text-rose-700 border-rose-300 font-semibold"
-                                    >
-                                      {r.status}
-                                    </Badge>
-                                  )}
-                                </TableCell>
+                    <div className="space-y-3">
+                      <div className="border rounded-xl overflow-hidden bg-card">
+                        <div className="overflow-x-auto">
+                          <Table className="w-full">
+                            <TableHeader className="bg-muted/40 text-xs">
+                              <TableRow>
+                                <TableHead className="min-w-[140px] whitespace-nowrap">Nomor Refund</TableHead>
+                                <TableHead className="whitespace-nowrap">Tipe &amp; Metode</TableHead>
+                                <TableHead className="text-right whitespace-nowrap">Nominal Refund</TableHead>
+                                <TableHead className="min-w-[160px]">Alasan</TableHead>
+                                <TableHead className="min-w-[160px]">Diajukan &amp; Disetujui</TableHead>
+                                <TableHead className="text-center whitespace-nowrap">Status</TableHead>
                               </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
+                            </TableHeader>
+                            <TableBody className="text-xs font-medium">
+                              {detailData.refunds.map((r) => (
+                                <TableRow key={r.id} className="hover:bg-muted/20">
+                                  <TableCell className="font-mono font-bold text-foreground whitespace-nowrap">
+                                    {r.refundNumber}
+                                  </TableCell>
+                                  <TableCell className="whitespace-nowrap">
+                                    <div className="space-y-0.5">
+                                      <Badge
+                                        variant="outline"
+                                        className="bg-muted font-semibold uppercase text-[10px]"
+                                      >
+                                        {r.resolutionType
+                                          ? REFUND_RESOLUTION_LABELS[r.resolutionType]
+                                          : r.refundType}
+                                      </Badge>
+                                      <p className="text-[11px] text-muted-foreground capitalize">
+                                        {r.payoutMethod ?? r.refundMethod}
+                                      </p>
+                                    </div>
+                                  </TableCell>
+                                  <TableCell className="text-right font-mono font-bold text-rose-600 whitespace-nowrap">
+                                    {r.resolutionType === "replacement"
+                                      ? "Rp 0 (Replacement)"
+                                      : formatRupiah(r.amount)}
+                                    {(r.referenceTaxAmount ?? 0) +
+                                      (r.referenceServiceChargeAmount ?? 0) >
+                                    0 ? (
+                                      <p className="text-[10px] text-muted-foreground font-normal">
+                                        Ref Tax/Svc:{" "}
+                                        {formatRupiah(
+                                          (r.referenceTaxAmount ?? 0) +
+                                            (r.referenceServiceChargeAmount ??
+                                              0),
+                                        )}
+                                      </p>
+                                    ) : null}
+                                  </TableCell>
+                                  <TableCell className="max-w-[200px] truncate" title={r.reason}>
+                                    {r.reason}
+                                  </TableCell>
+                                  <TableCell>
+                                    <p className="font-bold text-foreground">Oleh: {r.requesterName}</p>
+                                    {r.approverName && (
+                                      <p className="text-[11px] text-muted-foreground">
+                                        Disetujui: {r.approverName} ({formatDateTime(r.approvedAt)})
+                                      </p>
+                                    )}
+                                  </TableCell>
+                                  <TableCell className="text-center whitespace-nowrap space-y-1">
+                                    {r.approvalStatus ? (
+                                      <Badge
+                                        variant="outline"
+                                        className="font-semibold text-[10px]"
+                                      >
+                                        {APPROVAL_STATUS_LABELS[r.approvalStatus]}
+                                      </Badge>
+                                    ) : null}
+                                    {r.status === "completed" ? (
+                                      <Badge
+                                        variant="outline"
+                                        className="bg-emerald-50 text-emerald-700 border-emerald-300 font-semibold"
+                                      >
+                                        Selesai (Completed)
+                                      </Badge>
+                                    ) : r.status === "pending" ? (
+                                      <Badge
+                                        variant="outline"
+                                        className="bg-amber-50 text-amber-700 border-amber-300 font-semibold"
+                                      >
+                                        {r.payoutStatus
+                                          ? PAYOUT_STATUS_LABELS[r.payoutStatus]
+                                          : "Menunggu Persetujuan"}
+                                      </Badge>
+                                    ) : (
+                                      <Badge
+                                        variant="outline"
+                                        className="bg-rose-50 text-rose-700 border-rose-300 font-semibold"
+                                      >
+                                        {r.status}
+                                      </Badge>
+                                    )}
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      </div>
+                      <div className="flex justify-end">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setIsDetailOpen(false);
+                            setViewMode("refunds");
+                            setFocusRefundId(detailData.refunds[0]?.id ?? null);
+                          }}
+                          className="h-8 rounded-xl text-xs gap-1.5"
+                        >
+                          <Eye className="size-3.5" />
+                          Kelola Persetujuan / Bukti / Koreksi di Antrean Refund
+                        </Button>
                       </div>
                     </div>
                   )}
@@ -1705,6 +1841,20 @@ export function TransactionHistory({
           )}
         </DialogContent>
       </Dialog>
+        </>
+      )}
+
+      <RefundRequestModal
+        orderId={refundOrderId}
+        isOpen={refundOrderId !== null}
+        userRole={userRole}
+        onClose={() => setRefundOrderId(null)}
+        onSuccess={() => {
+          if (detailData) {
+            void handleOpenDetail(detailData.order.id);
+          }
+        }}
+      />
     </div>
   );
 }

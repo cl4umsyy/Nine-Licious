@@ -140,6 +140,285 @@ revoke all on function public.assert_active_cashier_shift_for_order_mutation() f
 
 
 -- -----------------------------------------------------------------------------
+-- 2B. HARDENING F4 INVENTORY TRIGGER & INTERNAL DEDUCT GUARD FOR REPLACEMENT
+-- Menjamin pesanan order_kind = 'replacement' tidak pernah mengalami double
+-- stock deduction meski payment_status diubah atau deduct_order_stock_internal dipanggil.
+-- -----------------------------------------------------------------------------
+create or replace function public.deduct_order_stock_internal(p_order_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_order record;
+  v_res record;
+  v_ing record;
+  v_delta numeric(12, 3);
+  v_stock_before numeric(12, 3);
+  v_stock_after numeric(12, 3);
+  v_actual_deduction numeric(12, 3);
+  v_now timestamptz := pg_catalog.now();
+  v_deducted_count integer := 0;
+  v_inserted_id uuid;
+begin
+  if p_order_id is null then
+    return pg_catalog.jsonb_build_object('ok', false, 'reason', 'invalid_order_id', 'deducted_count', 0);
+  end if;
+
+  select id, order_number, order_kind, status, payment_status, created_by
+  into v_order
+  from public.orders
+  where id = p_order_id;
+
+  if not found then
+    return pg_catalog.jsonb_build_object('ok', false, 'reason', 'order_not_found', 'deducted_count', 0);
+  end if;
+
+  -- Guard eksplisit: pemotongan stok Replacement dilakukan atomik oleh execute_order_replacement_internal
+  if coalesce(v_order.order_kind, 'standard') = 'replacement' then
+    return pg_catalog.jsonb_build_object(
+      'ok', true,
+      'order_id', v_order.id,
+      'skipped', true,
+      'reason', 'replacement_order_deducted_by_refund_engine',
+      'deducted_count', 0
+    );
+  end if;
+
+  if v_order.payment_status <> 'paid'
+     or v_order.status in ('cancelled', 'refunded') then
+    return pg_catalog.jsonb_build_object(
+      'ok', true,
+      'order_id', v_order.id,
+      'skipped', true,
+      'reason', 'order_not_eligible_for_stock_deduction',
+      'deducted_count', 0
+    );
+  end if;
+
+  -- SKENARIO A: Pesanan memiliki reservasi aktif di public.ingredient_reservations
+  for v_res in
+    select ir.id as reservation_id, ir.ingredient_id, ir.quantity_reserved
+    from public.ingredient_reservations ir
+    where ir.order_id = p_order_id
+      and ir.status = 'active'
+    order by ir.ingredient_id asc
+  loop
+    select id, name, current_stock, reserved_stock
+    into v_ing
+    from public.ingredients
+    where id = v_res.ingredient_id
+    for update;
+
+    if not found then
+      continue;
+    end if;
+
+    v_stock_before := v_ing.current_stock;
+    v_delta := -v_res.quantity_reserved;
+    v_stock_after := v_stock_before + v_delta;
+
+    v_inserted_id := null;
+    insert into public.stock_movements (
+      ingredient_id,
+      movement_type,
+      quantity_delta,
+      stock_before,
+      stock_after,
+      order_id,
+      reason,
+      created_by,
+      created_at
+    ) values (
+      v_ing.id,
+      'sale_deduction',
+      v_delta,
+      v_stock_before,
+      v_stock_after,
+      v_order.id,
+      pg_catalog.format('Pengurangan stok otomatis dari pesanan lunas #%s', v_order.order_number),
+      v_order.created_by,
+      v_now
+    )
+    on conflict (order_id, ingredient_id)
+      where (movement_type = 'sale_deduction' and order_id is not null)
+    do nothing
+    returning id into v_inserted_id;
+
+    if v_inserted_id is not null then
+      perform pg_catalog.set_config('nine_licious.allow_stock_mutation', 'on', true);
+
+      update public.ingredients
+      set
+        current_stock = v_stock_after,
+        reserved_stock = greatest(0::numeric, reserved_stock - v_res.quantity_reserved),
+        updated_at = v_now
+      where id = v_ing.id;
+
+      update public.ingredient_reservations
+      set
+        status = 'fulfilled',
+        updated_at = v_now
+      where id = v_res.reservation_id;
+
+      v_deducted_count := v_deducted_count + 1;
+    else
+      update public.ingredient_reservations
+      set
+        status = 'fulfilled',
+        updated_at = v_now
+      where id = v_res.reservation_id;
+    end if;
+  end loop;
+
+  -- SKENARIO B: Pesanan historis / pesanan tanpa reservasi aktif sebelumnya
+  if v_deducted_count = 0 then
+    for v_res in
+      select
+        r.ingredient_id,
+        pg_catalog.round(sum(r.quantity_required * oi.quantity)::numeric, 3) as total_required
+      from public.order_items oi
+      inner join public.recipes r
+        on r.product_id = oi.product_id
+      where oi.order_id = p_order_id
+        and oi.quantity > 0
+      group by r.ingredient_id
+      having pg_catalog.round(sum(r.quantity_required * oi.quantity)::numeric, 3) > 0
+      order by r.ingredient_id asc
+    loop
+      select id, name, current_stock, reserved_stock
+      into v_ing
+      from public.ingredients
+      where id = v_res.ingredient_id
+      for update;
+
+      if not found then
+        continue;
+      end if;
+
+      v_stock_before := v_ing.current_stock;
+      v_actual_deduction := least(greatest(v_stock_before, 0), v_res.total_required);
+      if v_actual_deduction <= 0 then
+        continue;
+      end if;
+      v_delta := -v_actual_deduction;
+      v_stock_after := v_stock_before + v_delta;
+
+      v_inserted_id := null;
+      insert into public.stock_movements (
+        ingredient_id,
+        movement_type,
+        quantity_delta,
+        stock_before,
+        stock_after,
+        order_id,
+        reason,
+        created_by,
+        created_at
+      ) values (
+        v_ing.id,
+        'sale_deduction',
+        v_delta,
+        v_stock_before,
+        v_stock_after,
+        v_order.id,
+        pg_catalog.format('Pengurangan stok otomatis dari pesanan lunas #%s', v_order.order_number),
+        v_order.created_by,
+        v_now
+      )
+      on conflict (order_id, ingredient_id)
+        where (movement_type = 'sale_deduction' and order_id is not null)
+      do nothing
+      returning id into v_inserted_id;
+
+      if v_inserted_id is not null then
+        perform pg_catalog.set_config('nine_licious.allow_stock_mutation', 'on', true);
+        update public.ingredients
+        set
+          current_stock = v_stock_after,
+          updated_at = v_now
+        where id = v_ing.id;
+
+        v_deducted_count := v_deducted_count + 1;
+      end if;
+    end loop;
+  end if;
+
+  return pg_catalog.jsonb_build_object(
+    'ok', true,
+    'order_id', v_order.id,
+    'deducted_count', v_deducted_count
+  );
+end;
+$$;
+
+revoke all on function public.deduct_order_stock_internal(uuid) from public, anon, authenticated;
+grant execute on function public.deduct_order_stock_internal(uuid) to service_role;
+
+create or replace function public.trg_fn_orders_deduct_stock_on_paid()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_err_state text;
+  v_err_msg text;
+begin
+  -- Replacement sudah memotong stok secara atomik pada R5 (execute_order_replacement_internal)
+  if coalesce(new.order_kind, 'standard') = 'replacement' then
+    return new;
+  end if;
+
+  begin
+    perform public.deduct_order_stock_internal(new.id);
+  exception
+    when others then
+      v_err_state := sqlstate;
+      v_err_msg := sqlerrm;
+      raise warning
+        '[F4 Inventory] Gagal memotong stok otomatis untuk order % (%): [%] %',
+        new.id,
+        new.order_number,
+        v_err_state,
+        v_err_msg;
+
+      begin
+        insert into public.audit_logs (
+          action,
+          user_id,
+          username,
+          entity,
+          entity_id,
+          details
+        ) values (
+          'inventory.sale_deduction_failed',
+          new.created_by,
+          null,
+          'order',
+          new.id::text,
+          pg_catalog.jsonb_build_object(
+            'order_id', new.id,
+            'order_number', new.order_number,
+            'sqlstate', v_err_state,
+            'error_message', v_err_msg
+          )
+        );
+      exception
+        when others then
+          null;
+      end;
+  end;
+
+  return new;
+end;
+$$;
+
+revoke all on function public.trg_fn_orders_deduct_stock_on_paid() from public, anon, authenticated, service_role;
+
+
+-- -----------------------------------------------------------------------------
 -- 3. TABEL BARU: public.order_replacements
 -- Menghubungkan pengajuan replacement di refunds dengan tiket produksi KDS baru
 -- (Tanpa kolom finansial/PII sehingga aman dibaca oleh KDS)

@@ -9,6 +9,7 @@ import type {
   OrderDiscount,
   OrderItem,
   OrderItemModifier,
+  OrderKind,
   OrderStatus,
   OrderType,
   PaymentStatus,
@@ -34,6 +35,8 @@ type RawCashierOrderRow = {
   order_number: string;
   queue_number: string | null;
   order_type: OrderType;
+  order_kind?: OrderKind;
+  parent_order_id?: string | null;
   table_id: string | null;
   dining_session_id: string | null;
   customer_name: string | null;
@@ -103,7 +106,7 @@ export async function getCashierOrdersAction(): Promise<
   const primaryQuery = await supabase
     .from("orders")
     .select(
-      "id, order_number, queue_number, order_type, table_id, dining_session_id, customer_name, status, payment_status, kds_status, is_finalized, grand_total, paid_total, served_at, served_by, created_at, updated_at, dining_tables(name)",
+      "id, order_number, queue_number, order_type, order_kind, parent_order_id, table_id, dining_session_id, customer_name, status, payment_status, kds_status, is_finalized, grand_total, paid_total, served_at, served_by, created_at, updated_at, dining_tables(name)",
     )
     .or(
       `created_at.gte.${cutoffIso},status.in.(awaiting_payment,partially_paid,paid)`,
@@ -117,7 +120,7 @@ export async function getCashierOrdersAction(): Promise<
       const fallbackQuery = await supabase
         .from("orders")
         .select(
-          "id, order_number, queue_number, order_type, table_id, dining_session_id, customer_name, status, payment_status, kds_status, is_finalized, grand_total, paid_total, created_at, updated_at, dining_tables(name)",
+          "id, order_number, queue_number, order_type, order_kind, parent_order_id, table_id, dining_session_id, customer_name, status, payment_status, kds_status, is_finalized, grand_total, paid_total, created_at, updated_at, dining_tables(name)",
         )
         .or(
           `created_at.gte.${cutoffIso},status.in.(awaiting_payment,partially_paid,paid)`,
@@ -206,6 +209,8 @@ export async function getCashierOrdersAction(): Promise<
       orderNumber: row.order_number,
       queueNumber: row.queue_number,
       orderType: row.order_type,
+      orderKind: row.order_kind ?? "standard",
+      parentOrderId: row.parent_order_id ?? null,
       tableId: row.table_id,
       tableName: extractTableName(row.dining_tables),
       diningSessionId: row.dining_session_id,

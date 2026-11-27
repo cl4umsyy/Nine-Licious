@@ -259,6 +259,28 @@ export function KdsBoard({
           scheduleRealtimeSync();
         },
       )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "kds_item_cancellations",
+        },
+        () => {
+          scheduleRealtimeSync();
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "order_replacements",
+        },
+        () => {
+          scheduleRealtimeSync();
+        },
+      )
       .subscribe((status) => {
         if (!isMountedRef.current) return;
         if (status === "SUBSCRIBED") {
@@ -540,7 +562,9 @@ export function KdsBoard({
                 <AlertOctagon className="mt-0.5 size-5 shrink-0" />
                 <div className="space-y-0.5 text-sm">
                   <p className="font-bold">
-                    Hentikan Persiapan:{" "}
+                    {alert.productName
+                      ? `Pembatalan Item (${alert.cancelledQuantity ?? 1}x ${alert.productName}): `
+                      : "Hentikan Persiapan: "}
                     {alert.queueNumber
                       ? `${alert.queueNumber} (${alert.orderNumber})`
                       : alert.orderNumber}
@@ -551,8 +575,16 @@ export function KdsBoard({
                         : ""}
                   </p>
                   <p className="text-xs font-medium text-destructive/90">
-                    Pesanan dibatalkan melalui Refund Penuh ({alert.reason}).
-                    Tiket telah dihapus dari antrean dapur aktif.
+                    {alert.productName
+                      ? `Tindakan dapur: ${
+                          alert.kitchenAction === "cancel_ticket_or_item"
+                            ? "Hentikan / batalkan item"
+                            : alert.kitchenAction ===
+                                "stop_preparation_if_possible"
+                              ? "Hentikan proses masak bila memungkinkan"
+                              : "Item sudah siap sebelumnya"
+                        } (${alert.reason}).`
+                      : `Pesanan dibatalkan melalui Refund Penuh (${alert.reason}). Tiket telah dihapus dari antrean dapur aktif.`}
                   </p>
                 </div>
               </div>

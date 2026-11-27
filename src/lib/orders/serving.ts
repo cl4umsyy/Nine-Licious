@@ -1,4 +1,10 @@
-import type { KdsStatus, OrderStatus, OrderType, PaymentStatus } from "@/types/database";
+import type {
+  KdsStatus,
+  OrderKind,
+  OrderStatus,
+  OrderType,
+  PaymentStatus,
+} from "@/types/database";
 import { evaluateDiningSessionClosure } from "./session-closure";
 import type { DiningSessionSummary } from "./types";
 
@@ -15,6 +21,7 @@ export type PendingServingOrder = {
   orderNumber: string;
   queueNumber: string | null;
   orderType: OrderType;
+  orderKind?: OrderKind;
   tableId: string | null;
   tableName: string | null;
   diningSessionId: string | null;

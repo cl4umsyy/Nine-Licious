@@ -15,6 +15,7 @@ import {
   Plus,
   Receipt,
   RefreshCw,
+  RotateCcw,
   Search,
   ShoppingBag,
   Utensils,
@@ -26,6 +27,8 @@ import { OrderCancelModal } from "@/components/pos/order-cancel-modal";
 import { OrderConfirmationModal } from "@/components/pos/order-confirmation-modal";
 import { PaymentModal } from "@/components/pos/payment-modal";
 import { ReceiptModal } from "@/components/pos/receipt-modal";
+import { RefundRequestModal } from "@/components/pos/refund-request-modal";
+import { RefundManagementPanel } from "@/components/refunds/refund-management-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -65,6 +68,7 @@ import type { OrderType, Shift } from "@/types/database";
 type CashierOrdersBoardProps = {
   initialData: CashierOrdersBoardData;
   userRole: string;
+  currentUserId?: string;
   initialError?: string | null;
   activeShift?: Shift | null;
 };
@@ -106,6 +110,7 @@ function formatWibTime(iso: string): string {
 export function CashierOrdersBoard({
   initialData,
   userRole,
+  currentUserId,
   initialError = null,
   activeShift,
 }: CashierOrdersBoardProps) {
@@ -139,6 +144,9 @@ export function CashierOrdersBoard({
     null,
   );
   const [receiptOrderId, setReceiptOrderId] = useState<string | null>(null);
+  const [refundOrderId, setRefundOrderId] = useState<string | null>(null);
+  const [boardView, setBoardView] = useState<"orders" | "refunds">("orders");
+  const [focusRefundId, setFocusRefundId] = useState<string | null>(null);
 
   // Serving confirmation dialog state
   const [orderToServe, setOrderToServe] =
@@ -218,8 +226,22 @@ export function CashierOrdersBoard({
 
   useEffect(() => {
     isMountedRef.current = true;
+    let urlTimer: ReturnType<typeof setTimeout> | null = null;
+    if (typeof window !== "undefined") {
+      const sp = new URLSearchParams(window.location.search);
+      const tab = sp.get("tab");
+      const rid = sp.get("refundId");
+      if (tab === "refunds" || rid) {
+        urlTimer = setTimeout(() => {
+          if (!isMountedRef.current) return;
+          setBoardView("refunds");
+          if (rid) setFocusRefundId(rid);
+        }, 0);
+      }
+    }
     return () => {
       isMountedRef.current = false;
+      if (urlTimer) clearTimeout(urlTimer);
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
       }
@@ -396,6 +418,33 @@ export function CashierOrdersBoard({
         {/* Top Action & Status Bar */}
         <section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4 shadow-xs lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex rounded-xl border bg-muted/40 p-0.5">
+              <button
+                type="button"
+                onClick={() => setBoardView("orders")}
+                className={cn(
+                  "rounded-lg px-3 py-1 text-xs font-semibold transition-colors cursor-pointer",
+                  boardView === "orders"
+                    ? "bg-background text-foreground shadow-2xs"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                Daftar Pesanan
+              </button>
+              <button
+                type="button"
+                onClick={() => setBoardView("refunds")}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-semibold transition-colors cursor-pointer",
+                  boardView === "refunds"
+                    ? "bg-background text-foreground shadow-2xs"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <RotateCcw className="size-3" />
+                Pengajuan &amp; Riwayat Refund
+              </button>
+            </div>
             <span
               className={cn(
                 "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold",
@@ -449,14 +498,23 @@ export function CashierOrdersBoard({
           </div>
         </section>
 
-        {syncError ? (
-          <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-2.5 text-xs font-medium text-destructive">
-            {syncError}
-          </div>
-        ) : null}
+        {boardView === "refunds" ? (
+          <RefundManagementPanel
+            userRole={userRole}
+            currentUserId={currentUserId}
+            initialFocusRefundId={focusRefundId}
+            onMutated={() => void syncOrders({ manual: false })}
+          />
+        ) : (
+          <>
+            {syncError ? (
+              <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-2.5 text-xs font-medium text-destructive">
+                {syncError}
+              </div>
+            ) : null}
 
-        {/* Filter Tabs + Search + Type Filter */}
-        <section className="space-y-3 rounded-2xl border border-border bg-card p-4 shadow-xs">
+            {/* Filter Tabs + Search + Type Filter */}
+            <section className="space-y-3 rounded-2xl border border-border bg-card p-4 shadow-xs">
           {/* Status Filter Pills */}
           <div className="flex flex-wrap items-center gap-1.5">
             {CASHIER_ORDER_FILTERS.map((filter) => {
@@ -646,6 +704,15 @@ export function CashierOrdersBoard({
                           </Badge>
                         )}
 
+                        {order.orderKind === "replacement" ? (
+                          <Badge
+                            variant="outline"
+                            className="border-primary/40 bg-primary/10 text-[11px] font-bold tracking-wide text-primary"
+                          >
+                            REPLACEMENT
+                          </Badge>
+                        ) : null}
+
                         {order.status === "cancelled" ? (
                           <Badge
                             variant="destructive"
@@ -721,10 +788,14 @@ export function CashierOrdersBoard({
                     <div className="flex shrink-0 flex-col justify-between gap-3 border-t border-border/70 pt-3 lg:w-64 lg:items-end lg:border-t-0 lg:pt-0">
                       <div className="flex items-baseline justify-between gap-3 lg:flex-col lg:items-end lg:gap-0.5">
                         <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                          Total Tagihan
+                          {order.orderKind === "replacement"
+                            ? "Nilai Tiket Pengganti"
+                            : "Total Tagihan"}
                         </span>
                         <span className="font-display text-lg font-bold tabular-nums text-primary">
-                          {formatRupiah(order.grandTotal)}
+                          {order.orderKind === "replacement"
+                            ? "Rp 0 (Pengganti)"
+                            : formatRupiah(order.grandTotal)}
                         </span>
                         {order.remainingBalance > 0 && isUnpaid ? (
                           <span className="text-[11px] font-semibold tabular-nums text-amber-700">
@@ -803,6 +874,22 @@ export function CashierOrdersBoard({
                           </Button>
                         ) : null}
 
+                        {order.orderKind !== "replacement" &&
+                        (order.status === "paid" ||
+                          order.status === "completed") &&
+                        order.paidTotal > 0 ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setRefundOrderId(order.id)}
+                            className="h-9 gap-1 rounded-xl px-3 text-xs font-semibold text-rose-700 border-rose-200 hover:bg-rose-50"
+                          >
+                            <RotateCcw className="size-3.5" />
+                            Komplain / Refund
+                          </Button>
+                        ) : null}
+
                         <Button
                           type="button"
                           variant="outline"
@@ -823,6 +910,8 @@ export function CashierOrdersBoard({
               );
             })}
           </section>
+        )}
+          </>
         )}
       </div>
 
@@ -886,6 +975,16 @@ export function CashierOrdersBoard({
         orderId={receiptOrderId}
         isOpen={receiptOrderId !== null}
         onClose={() => setReceiptOrderId(null)}
+      />
+
+      <RefundRequestModal
+        orderId={refundOrderId}
+        isOpen={refundOrderId !== null}
+        userRole={userRole}
+        onClose={() => setRefundOrderId(null)}
+        onSuccess={() => {
+          void syncOrders({ manual: false });
+        }}
       />
 
       <OrderCancelModal

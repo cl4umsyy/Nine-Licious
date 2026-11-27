@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { BrandMark } from "@/components/brand-mark";
 import { EnvironmentBadge } from "@/components/environment-badge";
+import { NotificationBell } from "@/components/layout/notification-bell";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -185,6 +186,7 @@ export function AppShell({ profile, environment, children }: AppShellProps) {
 
           <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
             <EnvironmentBadge environment={environment} />
+            <NotificationBell userId={profile.id} role={profile.role} />
             <Button
               asChild
               variant="ghost"

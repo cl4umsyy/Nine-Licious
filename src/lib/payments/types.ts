@@ -99,6 +99,7 @@ export type ReceiptData = {
     id: string;
     order_number: string;
     order_type: string;
+    order_kind?: "standard" | "replacement";
     table_name: string | null;
     customer_name: string | null;
     status: string;
@@ -109,6 +110,7 @@ export type ReceiptData = {
     queue_position?: number;
     cashier_name: string;
     created_at: string;
+    paid_at?: string | null;
     subtotal: number;
     discount_product_total: number;
     discount_order_total: number;
@@ -172,10 +174,14 @@ export type ReceiptData = {
     refund_number: string;
     gateway_refund_id: string | null;
     refund_type: string;
+    resolution_type?: string;
     refund_method: string;
     amount: number;
     reason: string;
+    reason_category?: string;
     status: string;
+    approval_status?: string;
+    payout_status?: string;
     created_at: string;
     approver_name: string | null;
   }>;

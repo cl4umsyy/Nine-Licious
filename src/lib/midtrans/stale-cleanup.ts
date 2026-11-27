@@ -153,6 +153,7 @@ export async function runSafeStaleMidtransCleanup(
       .select(
         "id, order_number, order_type, table_id, dining_session_id, status, payment_status, grand_total, paid_total, created_at",
       )
+      .neq("order_kind", "replacement")
       .in("status", ["awaiting_payment", "partially_paid"])
       .order("created_at", { ascending: true })
       .range(from, from + pageSize - 1);
@@ -471,6 +472,7 @@ export async function runSafeStaleMidtransCleanup(
                 const { count: remainingOpenOrders } = await adminClient
                   .from("orders")
                   .select("id", { count: "exact", head: true })
+                  .neq("order_kind", "replacement")
                   .eq("table_id", order.table_id)
                   .in("status", ["awaiting_payment", "partially_paid", "paid"]);
                 if ((remainingOpenOrders ?? 0) === 0) {
@@ -554,6 +556,7 @@ export async function runSafeStaleMidtransCleanup(
   const { data: cancelledOrders } = await adminClient
     .from("orders")
     .select("id, order_number, status, payment_status, grand_total, paid_total, created_at")
+    .neq("order_kind", "replacement")
     .eq("status", "cancelled")
     .order("created_at", { ascending: false })
     .limit(200);

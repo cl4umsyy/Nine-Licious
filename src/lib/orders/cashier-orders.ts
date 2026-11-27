@@ -1,5 +1,6 @@
 import type {
   KdsStatus,
+  OrderKind,
   OrderStatus,
   OrderType,
   PaymentStatus,
@@ -26,6 +27,8 @@ export type CashierOrderListItem = {
   orderNumber: string;
   queueNumber: string | null;
   orderType: OrderType;
+  orderKind?: OrderKind;
+  parentOrderId?: string | null;
   tableId: string | null;
   tableName: string | null;
   diningSessionId: string | null;

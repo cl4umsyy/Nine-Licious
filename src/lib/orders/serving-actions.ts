@@ -7,7 +7,7 @@ import { getCashierActor } from "@/lib/auth/session";
 import { computeAdditionalOrderMap } from "@/lib/kds/transitions";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import type { OrderType } from "@/types/database";
+import type { OrderKind, OrderType } from "@/types/database";
 import {
   isMissingServingSchemaError,
   isOrderPendingServing,
@@ -33,6 +33,7 @@ type RawServingOrderRow = {
   order_number: string;
   queue_number: string | null;
   order_type: OrderType;
+  order_kind?: OrderKind;
   table_id: string | null;
   dining_session_id: string | null;
   status: string;
@@ -120,7 +121,7 @@ export async function getPendingServingOrdersAction(): Promise<
   const primaryQuery = await supabase
     .from("orders")
     .select(
-      "id, order_number, queue_number, order_type, table_id, dining_session_id, status, payment_status, kds_status, grand_total, paid_total, served_at, created_at, updated_at, dining_tables(name)",
+      "id, order_number, queue_number, order_type, order_kind, table_id, dining_session_id, status, payment_status, kds_status, grand_total, paid_total, served_at, created_at, updated_at, dining_tables(name)",
     )
     .eq("status", "paid")
     .eq("kds_status", "ready")
@@ -135,7 +136,7 @@ export async function getPendingServingOrdersAction(): Promise<
       const fallbackQuery = await supabase
         .from("orders")
         .select(
-          "id, order_number, queue_number, order_type, table_id, dining_session_id, status, payment_status, kds_status, grand_total, paid_total, created_at, updated_at, dining_tables(name)",
+          "id, order_number, queue_number, order_type, order_kind, table_id, dining_session_id, status, payment_status, kds_status, grand_total, paid_total, created_at, updated_at, dining_tables(name)",
         )
         .eq("status", "paid")
         .eq("kds_status", "ready")
@@ -285,6 +286,7 @@ export async function getPendingServingOrdersAction(): Promise<
       orderNumber: row.order_number,
       queueNumber: row.queue_number,
       orderType: row.order_type,
+      orderKind: row.order_kind ?? "standard",
       tableId: row.table_id,
       tableName: extractTableName(row.dining_tables),
       diningSessionId: row.dining_session_id,

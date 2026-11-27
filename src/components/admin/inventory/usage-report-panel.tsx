@@ -40,10 +40,10 @@ import {
 import { getIngredientUsageReportAction } from "@/lib/inventory/actions";
 import { formatStockQuantity } from "@/lib/inventory/calculations";
 import {
-  STOCK_MOVEMENT_LABELS,
-  STOCK_MOVEMENT_TYPES,
+  ALL_STOCK_MOVEMENT_LABELS,
+  ALL_STOCK_MOVEMENT_TYPES,
+  type AllStockMovementType,
   STOCK_STATUS_LABELS,
-  type StockMovementType,
 } from "@/lib/inventory/constants";
 import type {
   Ingredient,
@@ -105,7 +105,7 @@ export function UsageReportPanel({
           movementType:
             params.movType === "all"
               ? null
-              : (params.movType as StockMovementType),
+              : (params.movType as AllStockMovementType),
         });
 
         if (!result.ok || !result.data) {
@@ -247,9 +247,9 @@ export function UsageReportPanel({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Semua Jenis Mutasi</SelectItem>
-                  {STOCK_MOVEMENT_TYPES.map((t) => (
+                  {ALL_STOCK_MOVEMENT_TYPES.map((t) => (
                     <SelectItem key={t} value={t}>
-                      {STOCK_MOVEMENT_LABELS[t]}
+                      {ALL_STOCK_MOVEMENT_LABELS[t]}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -469,29 +469,46 @@ export function UsageReportPanel({
                           <TableCell>
                             <Badge
                               variant={
-                                mov.movement_type === "manual_in"
+                                mov.movement_type === "manual_in" ||
+                                mov.movement_type === "refund_restock"
                                   ? "secondary"
                                   : mov.movement_type === "sale_deduction"
                                     ? "outline"
-                                    : "default"
+                                    : mov.movement_type === "waste"
+                                      ? "destructive"
+                                      : "default"
                               }
                               className="text-[10px]"
                             >
-                              {STOCK_MOVEMENT_LABELS[mov.movement_type]}
+                              {ALL_STOCK_MOVEMENT_LABELS[mov.movement_type]}
                             </Badge>
                           </TableCell>
                           <TableCell
                             className={cn(
                               "whitespace-nowrap text-right font-mono text-xs font-bold",
-                              mov.quantity_delta > 0
-                                ? "text-emerald-700"
-                                : "text-destructive",
+                              mov.movement_type === "waste"
+                                ? "text-amber-700"
+                                : mov.quantity_delta > 0
+                                  ? "text-emerald-700"
+                                  : "text-destructive",
                             )}
                           >
-                            {mov.quantity_delta > 0 ? "+" : ""}
-                            {formatStockQuantity(
-                              mov.quantity_delta,
-                              mov.ingredient_unit,
+                            {mov.movement_type === "waste" ? (
+                              <>
+                                Waste{" "}
+                                {formatStockQuantity(
+                                  mov.wasted_quantity ?? 0,
+                                  mov.ingredient_unit,
+                                )}
+                              </>
+                            ) : (
+                              <>
+                                {mov.quantity_delta > 0 ? "+" : ""}
+                                {formatStockQuantity(
+                                  mov.quantity_delta,
+                                  mov.ingredient_unit,
+                                )}
+                              </>
                             )}
                           </TableCell>
                           <TableCell className="whitespace-nowrap text-right font-mono text-xs text-muted-foreground">

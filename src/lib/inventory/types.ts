@@ -1,7 +1,7 @@
 import type {
+  AllStockMovementType,
   IngredientUnit,
   ManualStockMovementType,
-  StockMovementType,
   StockStatus,
 } from "./constants";
 
@@ -67,11 +67,14 @@ export type ProductWithRecipe = {
 export type StockMovement = {
   id: string;
   ingredient_id: string;
-  movement_type: StockMovementType;
+  movement_type: AllStockMovementType;
   quantity_delta: number;
+  wasted_quantity?: number;
   stock_before: number;
   stock_after: number;
   order_id: string | null;
+  refund_id?: string | null;
+  order_item_id?: string | null;
   reason: string;
   idempotency_key: string | null;
   created_by: string | null;
@@ -109,6 +112,8 @@ export type IngredientUsageRow = {
   manual_in_total: number;
   manual_out_total: number;
   opname_net_delta: number;
+  waste_total?: number;
+  refund_restock_total?: number;
   net_change: number;
   movement_count: number;
   sale_order_count: number;

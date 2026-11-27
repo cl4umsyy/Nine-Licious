@@ -478,8 +478,12 @@ export function AuditExplorer({ initialData }: AuditExplorerProps) {
                 <SelectContent>
                   <SelectItem value="all">Semua Entitas</SelectItem>
                   <SelectItem value="orders">Pesanan (Orders)</SelectItem>
+                  <SelectItem value="order">Pesanan (Order Detail)</SelectItem>
                   <SelectItem value="payments">Pembayaran (Payments)</SelectItem>
-                  <SelectItem value="refunds">Pengembalian (Refunds)</SelectItem>
+                  <SelectItem value="refund">Pengajuan Refund (R1-R5)</SelectItem>
+                  <SelectItem value="refunds">Pengembalian (Legacy)</SelectItem>
+                  <SelectItem value="refund_correction">Koreksi Refund</SelectItem>
+                  <SelectItem value="order_replacement">Replacement Menu</SelectItem>
                   <SelectItem value="shifts">Shift Kasir (Shifts)</SelectItem>
                   <SelectItem value="cash_movements">Mutasi Kas Laci</SelectItem>
                   <SelectItem value="inventory_items">Stok Bahan (Inventory)</SelectItem>
@@ -513,7 +517,16 @@ export function AuditExplorer({ initialData }: AuditExplorerProps) {
                   <SelectItem value="order_created">order_created</SelectItem>
                   <SelectItem value="order_served">order_served</SelectItem>
                   <SelectItem value="order_cancelled">order_cancelled</SelectItem>
-                  <SelectItem value="refund_approved">refund_approved</SelectItem>
+                  <SelectItem value="order.refund_requested">order.refund_requested</SelectItem>
+                  <SelectItem value="order.refund_approved">order.refund_approved</SelectItem>
+                  <SelectItem value="order.refund_rejected">order.refund_rejected</SelectItem>
+                  <SelectItem value="order.refund_cancelled">order.refund_cancelled</SelectItem>
+                  <SelectItem value="order.refund_corrected">order.refund_corrected</SelectItem>
+                  <SelectItem value="order.replacement_approved">order.replacement_approved</SelectItem>
+                  <SelectItem value="order.refund_manual_payout_completed">order.refund_manual_payout_completed</SelectItem>
+                  <SelectItem value="refund.evidence_uploaded">refund.evidence_uploaded</SelectItem>
+                  <SelectItem value="refund.evidence_requested">refund.evidence_requested</SelectItem>
+                  <SelectItem value="refund_approved">refund_approved (Legacy)</SelectItem>
                   <SelectItem value="stock_opname">stock_opname</SelectItem>
                   <SelectItem value="stock_received">stock_received</SelectItem>
                 </SelectContent>

@@ -99,6 +99,7 @@ declare
   v_req_ing record;
   v_available numeric(12, 3);
   v_delta numeric(12, 3);
+  v_inserted_id uuid;
   v_new_order_item_id uuid;
   v_src_mod record;
 begin
@@ -402,6 +403,7 @@ begin
     end if;
 
     v_delta := -v_req_ing.qty_needed;
+    v_inserted_id := null;
 
     insert into public.stock_movements (
       ingredient_id,
@@ -430,14 +432,17 @@ begin
     )
     on conflict (order_id, ingredient_id)
       where (movement_type = 'sale_deduction' and order_id is not null)
-    do nothing;
+    do nothing
+    returning id into v_inserted_id;
 
-    update public.ingredients
-    set current_stock = current_stock + v_delta,
-        updated_at = v_now
-    where id = v_ing.id;
+    if v_inserted_id is not null then
+      update public.ingredients
+      set current_stock = current_stock + v_delta,
+          updated_at = v_now
+      where id = v_ing.id;
 
-    v_deduct_count := v_deduct_count + 1;
+      v_deduct_count := v_deduct_count + 1;
+    end if;
   end loop;
 
   update public.order_replacements
@@ -3182,6 +3187,7 @@ as $$
 declare
   v_user_id uuid;
   v_user_role text;
+  v_is_active boolean;
   v_pre_order record;
   v_order record;
   v_payment record;
@@ -3207,9 +3213,15 @@ declare
   v_now timestamptz := pg_catalog.now();
 begin
   v_user_id := auth.uid();
-  v_user_role := public.current_user_role();
+  if v_user_id is null then
+    raise exception 'Hanya admin yang berhak memproses pengembalian dana (refund).';
+  end if;
 
-  if v_user_id is null or coalesce(v_user_role, '') <> 'admin' then
+  select role, is_active into v_user_role, v_is_active
+  from public.profiles
+  where id = v_user_id;
+
+  if not found or v_is_active is distinct from true or coalesce(v_user_role, '') <> 'admin' then
     raise exception 'Hanya admin yang berhak memproses pengembalian dana (refund).';
   end if;
 
@@ -3313,6 +3325,10 @@ begin
   perform 1 from public.payments where order_id = p_order_id order by id asc for update;
   perform 1 from public.refunds where order_id = p_order_id order by id asc for update;
 
+  if coalesce(v_order.order_kind, 'standard') <> 'standard' then
+    raise exception 'Pesanan pengganti (replacement) tidak dapat diajukan refund kembali.';
+  end if;
+
   if v_order.status = 'cancelled' then
     raise exception 'Pesanan sudah dibatalkan dan tidak dapat direfund.';
   end if;
@@ -3401,7 +3417,7 @@ begin
       case when p_refund_type = 'full' then 'full_refund' else 'partial_refund' end,
       p_refund_method, p_refund_method,
       p_amount, pg_catalog.btrim(p_reason), 'pending', 'approved', 'pending',
-      v_user_id, null, null, v_user_id, v_now,
+      v_user_id, v_user_id, v_now, v_user_id, v_now,
       null, pg_catalog.btrim(p_idempotency_key),
       pg_catalog.jsonb_build_object(
         'previous_order_status', v_order.status,
@@ -3409,9 +3425,19 @@ begin
         'previous_kds_status', v_order.kds_status,
         'is_full_refund', v_is_full_refund,
         'requested_by_role', v_user_role,
+        'approved_by_role', v_user_role,
+        'via_legacy_rpc', true,
         'verification_mode', 'server_side_midtrans'
       )
     ) returning id into v_refund_id;
+
+    if p_payment_id is not null then
+      insert into public.refund_payout_allocations (
+        refund_id, order_id, payment_id, payout_method, amount, payout_status
+      ) values (
+        v_refund_id, p_order_id, p_payment_id, 'midtrans', p_amount, 'pending'
+      );
+    end if;
 
     insert into public.audit_logs (action, user_id, entity, entity_id, details)
     values (
@@ -3419,7 +3445,19 @@ begin
       pg_catalog.jsonb_build_object(
         'refund_id', v_refund_id, 'refund_number', v_refund_number,
         'refund_type', p_refund_type, 'refund_method', p_refund_method,
-        'amount', p_amount, 'reason', pg_catalog.btrim(p_reason), 'status', 'pending', 'gateway_verification_required', true
+        'amount', p_amount, 'reason', pg_catalog.btrim(p_reason), 'status', 'pending',
+        'via_legacy_rpc', true, 'gateway_verification_required', true
+      )
+    );
+
+    insert into public.audit_logs (action, user_id, entity, entity_id, details)
+    values (
+      'order.refund_approved', v_user_id, 'refund', v_refund_id::text,
+      pg_catalog.jsonb_build_object(
+        'refund_id', v_refund_id, 'refund_number', v_refund_number,
+        'order_id', p_order_id, 'order_number', v_order.order_number,
+        'amount', p_amount, 'requested_by', v_user_id, 'approved_by', v_user_id,
+        'is_self_approval', true, 'via_legacy_rpc', true
       )
     );
 
@@ -3558,6 +3596,27 @@ begin
 
   insert into public.audit_logs (action, user_id, entity, entity_id, details)
   values (
+    'order.refund_requested', v_user_id, 'refund', v_refund_id::text,
+    pg_catalog.jsonb_build_object(
+      'refund_id', v_refund_id, 'refund_number', v_refund_number,
+      'order_id', p_order_id, 'order_number', v_order.order_number,
+      'amount', p_amount, 'requested_by_role', v_user_role, 'via_legacy_rpc', true
+    )
+  );
+
+  insert into public.audit_logs (action, user_id, entity, entity_id, details)
+  values (
+    'order.refund_approved', v_user_id, 'refund', v_refund_id::text,
+    pg_catalog.jsonb_build_object(
+      'refund_id', v_refund_id, 'refund_number', v_refund_number,
+      'order_id', p_order_id, 'order_number', v_order.order_number,
+      'amount', p_amount, 'requested_by', v_user_id, 'approved_by', v_user_id,
+      'is_self_approval', true, 'via_legacy_rpc', true
+    )
+  );
+
+  insert into public.audit_logs (action, user_id, entity, entity_id, details)
+  values (
     'order.refunded', v_user_id, 'order', p_order_id::text,
     pg_catalog.jsonb_build_object(
       'refund_id', v_refund_id, 'refund_number', v_refund_number,
@@ -3566,7 +3625,7 @@ begin
       'is_out_of_shift', (v_target_shift_id is null),
       'previous_order_status', v_order.status, 'new_order_status', v_new_order_status,
       'new_payment_status', v_new_payment_status, 'is_full_refund', v_is_full_refund,
-      'kitchen_notified', (v_kitchen_notified_at is not null)
+      'kitchen_notified', (v_kitchen_notified_at is not null), 'via_legacy_rpc', true
     )
   );
 

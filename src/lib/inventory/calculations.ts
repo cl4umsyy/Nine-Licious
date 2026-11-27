@@ -365,7 +365,7 @@ export function calculateStockOpnameDelta(
 export function aggregateIngredientUsageReport(
   movements: readonly Pick<
     StockMovement,
-    "ingredient_id" | "movement_type" | "quantity_delta" | "order_id"
+    "ingredient_id" | "movement_type" | "quantity_delta" | "wasted_quantity" | "order_id"
   >[],
   ingredientsById: ReadonlyMap<
     string,
@@ -380,6 +380,8 @@ export function aggregateIngredientUsageReport(
     manualInMilli: number;
     manualOutMilli: number;
     opnameNetMilli: number;
+    wasteMilli: number;
+    refundRestockMilli: number;
     netChangeMilli: number;
     movementCount: number;
     saleOrderIds: Set<string>;
@@ -395,6 +397,8 @@ export function aggregateIngredientUsageReport(
         manualInMilli: 0,
         manualOutMilli: 0,
         opnameNetMilli: 0,
+        wasteMilli: 0,
+        refundRestockMilli: 0,
         netChangeMilli: 0,
         movementCount: 0,
         saleOrderIds: new Set<string>(),
@@ -422,6 +426,12 @@ export function aggregateIngredientUsageReport(
       case "stock_opname":
         acc.opnameNetMilli += deltaMilli;
         break;
+      case "waste":
+        acc.wasteMilli += Math.abs(toMilliUnits(mov.wasted_quantity ?? 0));
+        break;
+      case "refund_restock":
+        acc.refundRestockMilli += Math.abs(deltaMilli);
+        break;
     }
   }
 
@@ -444,6 +454,8 @@ export function aggregateIngredientUsageReport(
       manual_in_total: fromMilliUnits(acc.manualInMilli),
       manual_out_total: fromMilliUnits(acc.manualOutMilli),
       opname_net_delta: fromMilliUnits(acc.opnameNetMilli),
+      waste_total: fromMilliUnits(acc.wasteMilli),
+      refund_restock_total: fromMilliUnits(acc.refundRestockMilli),
       net_change: fromMilliUnits(acc.netChangeMilli),
       movement_count: acc.movementCount,
       sale_order_count: acc.saleOrderIds.size,

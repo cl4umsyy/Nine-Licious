@@ -139,13 +139,26 @@ export function KdsTicketCard({
             </div>
 
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              {ticket.orderKind === "replacement" ? (
+                <Badge
+                  variant="outline"
+                  className="border-primary bg-primary text-primary-foreground px-2 py-0.5 text-xs font-bold tracking-wide"
+                >
+                  REPLACEMENT
+                </Badge>
+              ) : null}
+
               {ticket.orderType === "dine_in" ? (
                 <Badge
                   variant="secondary"
                   className="gap-1 border border-primary/20 bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary"
                 >
                   <Utensils className="size-3" />
-                  {ticket.tableName ? `Meja ${ticket.tableName}` : "Dine-in"}
+                  {ticket.tableName
+                    ? `Meja ${ticket.tableName}`
+                    : ticket.replacementTableName
+                      ? `Meja ${ticket.replacementTableName}`
+                      : "Dine-in"}
                 </Badge>
               ) : (
                 <Badge

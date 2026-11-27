@@ -148,6 +148,8 @@ export type FloorPlan = {
 
 export type OrderType = "dine_in" | "takeaway";
 
+export type OrderKind = "standard" | "replacement";
+
 export type OrderStatus =
   | "awaiting_payment"
   | "partially_paid"
@@ -183,6 +185,8 @@ export type Order = {
   id: string;
   order_number: string;
   order_type: OrderType;
+  order_kind?: OrderKind;
+  parent_order_id?: string | null;
   table_id: string | null;
   dining_session_id: string | null;
   status: OrderStatus;
@@ -208,6 +212,7 @@ export type Order = {
   is_finalized: boolean;
   finalized_at: string | null;
   finalized_by: string | null;
+  paid_at?: string | null;
   created_by: string | null;
   cancelled_by: string | null;
   cancelled_at: string | null;
@@ -431,11 +436,54 @@ export type MidtransWebhookEvent = {
   sanitized_payload: Record<string, unknown>;
 };
 
-export type RefundType = "full" | "partial";
+export type RefundType = "full" | "partial" | "replacement";
 
-export type RefundMethod = "cash" | "transfer" | "midtrans" | "manual";
+export type RefundMethod =
+  | "cash"
+  | "transfer"
+  | "midtrans"
+  | "manual"
+  | "none"
+  | "mixed";
 
-export type RefundRecordStatus = "pending" | "approved" | "rejected" | "completed";
+export type RefundRecordStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "cancelled"
+  | "completed";
+
+export type RefundResolutionType =
+  | "full_refund"
+  | "partial_refund"
+  | "replacement";
+
+export type RefundApprovalStatus =
+  | "pending_approval"
+  | "approved"
+  | "rejected"
+  | "cancelled";
+
+export type RefundPayoutStatus =
+  | "not_required"
+  | "pending"
+  | "processing"
+  | "completed"
+  | "failed"
+  | "reconciliation_required";
+
+export type RefundReasonCategory =
+  | "stock_unavailable"
+  | "wrong_order"
+  | "missing_item"
+  | "food_quality"
+  | "long_waiting_time"
+  | "payment_issue"
+  | "other";
+
+export type CompensationSeverity = "none" | "light" | "medium" | "heavy";
+
+export type RefundInventoryAction = "none" | "waste" | "restock" | "replace";
 
 export type Refund = {
   id: string;
@@ -444,18 +492,215 @@ export type Refund = {
   refund_number: string;
   gateway_refund_id?: string | null;
   refund_type: RefundType;
+  resolution_type?: RefundResolutionType;
   refund_method: RefundMethod;
+  payout_method?: string | null;
+  payout_reference?: string | null;
+  payout_completed_at?: string | null;
   amount: number;
+  subtotal_amount?: number;
+  discount_amount?: number;
+  service_charge_amount?: number;
+  tax_amount?: number;
+  reference_service_charge_amount?: number;
+  reference_tax_amount?: number;
+  rounding_adjustment?: number;
   reason: string;
+  reason_category?: RefundReasonCategory;
+  chronology?: string | null;
+  receipt_verified?: boolean;
   status: RefundRecordStatus;
+  approval_status?: RefundApprovalStatus;
+  payout_status?: RefundPayoutStatus;
   requested_by: string;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
   approved_by: string | null;
   approved_at: string | null;
+  rejection_reason?: string | null;
+  cancelled_by?: string | null;
+  cancelled_at?: string | null;
+  cancellation_reason?: string | null;
+  shift_id?: string | null;
+  parent_refund_id?: string | null;
   kitchen_notified_at: string | null;
   idempotency_key: string | null;
   metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+};
+
+export type RefundItem = {
+  id: string;
+  refund_id: string;
+  order_item_id: string;
+  product_name_snapshot: string;
+  quantity: number;
+  unit_price: number;
+  subtotal_amount: number;
+  discount_amount: number;
+  order_discount_share: number;
+  net_item_amount: number;
+  service_charge_amount: number;
+  tax_amount: number;
+  reference_service_charge_amount: number;
+  reference_tax_amount: number;
+  rounding_adjustment: number;
+  compensation_severity: CompensationSeverity;
+  compensation_percentage: 0 | 25 | 50 | 100;
+  is_full_item_refund: boolean;
+  refund_amount: number;
+  kds_status_snapshot: KdsStatus | null;
+  inventory_action: RefundInventoryAction;
+  reason: string | null;
+  created_at: string;
+};
+
+export type RefundPayoutMethod = "cash" | "transfer" | "midtrans" | "manual";
+
+export type RefundAllocationPayoutStatus =
+  | "pending"
+  | "processing"
+  | "completed"
+  | "failed"
+  | "reconciliation_required";
+
+export type RefundPayoutAllocation = {
+  id: string;
+  refund_id: string;
+  order_id: string;
+  payment_id: string;
+  payout_method: RefundPayoutMethod;
+  amount: number;
+  payout_status: RefundAllocationPayoutStatus;
+  gateway_refund_id: string | null;
+  payout_reference: string | null;
+  shift_id: string | null;
+  payout_completed_at: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RefundCorrectionType = "under_refund" | "over_refund";
+
+export type RefundCorrectionFollowUpStatus =
+  | "open"
+  | "resolved"
+  | "written_off";
+
+export type RefundCorrection = {
+  id: string;
+  refund_id: string;
+  expected_amount: number;
+  actual_amount: number;
+  difference_amount: number;
+  correction_type: RefundCorrectionType;
+  supplemental_refund_id: string | null;
+  follow_up_status: RefundCorrectionFollowUpStatus;
+  follow_up_notes: string | null;
+  reason: string;
+  idempotency_key: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OrderReplacementStatus =
+  | "pending_approval"
+  | "approved"
+  | "rejected"
+  | "cancelled"
+  | "in_kitchen"
+  | "ready"
+  | "completed";
+
+export type OrderReplacement = {
+  id: string;
+  original_order_id: string;
+  replacement_order_id: string | null;
+  refund_id: string;
+  original_order_type: OrderType;
+  table_name_snapshot: string | null;
+  status: OrderReplacementStatus;
+  items_summary: Array<{
+    product_name?: string;
+    quantity?: number;
+    kitchen_station?: string;
+  }>;
+  reason: string;
+  created_by: string;
+  approved_by: string | null;
+  approved_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type KdsCancellationAction =
+  | "cancel_ticket_or_item"
+  | "stop_preparation_if_possible"
+  | "already_ready_no_action";
+
+export type KdsItemCancellation = {
+  id: string;
+  order_id: string;
+  order_item_id: string;
+  refund_id: string;
+  order_number: string;
+  queue_number: string | null;
+  product_name: string;
+  cancelled_quantity: number;
+  kds_status_at_refund: KdsStatus | null;
+  kitchen_action: KdsCancellationAction;
+  reason: string;
+  acknowledged_by: string | null;
+  acknowledged_at: string | null;
+  created_at: string;
+};
+
+export type RefundEvidenceKind = "photo" | "video";
+
+export type RefundEvidence = {
+  id: string;
+  refund_id: string;
+  order_id: string;
+  file_path: string;
+  file_name: string;
+  file_type: string;
+  file_size: number;
+  evidence_kind: RefundEvidenceKind;
+  notes: string | null;
+  uploaded_by: string;
+  created_at: string;
+};
+
+export type NotificationType =
+  | "refund_requested"
+  | "refund_approved"
+  | "refund_rejected"
+  | "refund_cancelled"
+  | "refund_evidence_requested"
+  | "refund_payout_processing"
+  | "refund_payout_completed"
+  | "refund_payout_failed"
+  | "refund_corrected"
+  | "kds_item_cancelled"
+  | "kds_replacement_ticket";
+
+export type NotificationReferenceType = "refund" | "order" | "replacement";
+
+export type NotificationRecord = {
+  id: string;
+  recipient_id: string;
+  type: NotificationType;
+  title: string;
+  message: string;
+  reference_type: NotificationReferenceType;
+  reference_id: string;
+  metadata: Record<string, unknown>;
+  is_read: boolean;
+  read_at: string | null;
+  created_at: string;
 };
 
 export type ShiftStatus = "open" | "closed";

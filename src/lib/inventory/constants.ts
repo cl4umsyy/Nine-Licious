@@ -37,6 +37,21 @@ export const STOCK_MOVEMENT_TYPES = [
 
 export type StockMovementType = (typeof STOCK_MOVEMENT_TYPES)[number];
 
+export const REFUND_STOCK_MOVEMENT_TYPES = [
+  "waste",
+  "refund_restock",
+] as const;
+
+export type RefundStockMovementType =
+  (typeof REFUND_STOCK_MOVEMENT_TYPES)[number];
+
+export const ALL_STOCK_MOVEMENT_TYPES = [
+  ...STOCK_MOVEMENT_TYPES,
+  ...REFUND_STOCK_MOVEMENT_TYPES,
+] as const;
+
+export type AllStockMovementType = (typeof ALL_STOCK_MOVEMENT_TYPES)[number];
+
 export const MANUAL_STOCK_MOVEMENT_TYPES = [
   "manual_in",
   "manual_out",
@@ -53,11 +68,28 @@ export const STOCK_MOVEMENT_LABELS: Record<StockMovementType, string> = {
   stock_opname: "Stock Opname",
 };
 
+export const ALL_STOCK_MOVEMENT_LABELS: Record<AllStockMovementType, string> = {
+  ...STOCK_MOVEMENT_LABELS,
+  waste: "Waste Refund / Replacement",
+  refund_restock: "Restock Batal Pesanan",
+};
+
 export const STOCK_MOVEMENT_DESCRIPTIONS: Record<StockMovementType, string> = {
   sale_deduction: "Otomatis saat pesanan lunas sesuai resep produk.",
   manual_in: "Penambahan stok dari pembelian, restock, atau pengembalian manual.",
   manual_out: "Pengurangan stok manual (rusak, tumpah, kedaluwarsa, atau waste).",
   stock_opname: "Penyesuaian saldo mengikuti hasil hitung fisik aktual.",
+};
+
+export const ALL_STOCK_MOVEMENT_DESCRIPTIONS: Record<
+  AllStockMovementType,
+  string
+> = {
+  ...STOCK_MOVEMENT_DESCRIPTIONS,
+  waste:
+    "Catatan bahan terbuang dari komplain/replacement setelah stok terpotong saat lunas (delta stok = 0).",
+  refund_restock:
+    "Pengembalian stok bahan baku otomatis saat item belum diproduksi dibatalkan lewat refund.",
 };
 
 export const STOCK_STATUSES = ["safe", "low_stock", "out_of_stock"] as const;

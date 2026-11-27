@@ -494,36 +494,45 @@ function ReceiptModalContent({
               ) : null}
             </div>
 
-            {/* Detail Refund Jika Ada */}
-            {data.refunds.length > 0 ? (
-              <>
-                <Separator className="my-3 border-dashed border-neutral-400" />
-                <div className="space-y-1 text-[10px] text-destructive print:text-black">
-                  <span className="font-bold flex items-center gap-1">
-                    <RotateCcw className="size-3" />
-                    Rincian Pengembalian Dana (Refund):
-                  </span>
-                  {data.refunds.map((r) => (
-                    <div key={r.id} className="flex justify-between gap-2">
+            {/* Detail Refund Jika Ada (hanya refund finansial yang disetujui, tidak menampilkan pengajuan ditolak/dibatalkan/replacement Rp 0) */}
+            {(() => {
+              const visibleRefunds = data.refunds.filter(
+                (r) =>
+                  r.resolution_type !== "replacement" &&
+                  (r.approval_status === undefined ||
+                    r.approval_status === "approved"),
+              );
+              if (visibleRefunds.length === 0) return null;
+              return (
+                <>
+                  <Separator className="my-3 border-dashed border-neutral-400" />
+                  <div className="space-y-1 text-[10px] text-destructive print:text-black">
+                    <span className="font-bold flex items-center gap-1">
+                      <RotateCcw className="size-3" />
+                      Rincian Pengembalian Dana (Refund):
+                    </span>
+                    {visibleRefunds.map((r) => (
+                      <div key={r.id} className="flex justify-between gap-2">
+                        <span>
+                          {r.refund_number} ({r.refund_method.toUpperCase()}
+                          {r.status === "pending" ? " · PENDING" : ""})
+                        </span>
+                        <span className="shrink-0">
+                          -Rp {r.amount.toLocaleString("id-ID")}
+                        </span>
+                      </div>
+                    ))}
+
+                    <div className="flex justify-between pt-1 font-bold text-xs border-t border-dashed border-neutral-400 text-primary print:text-black">
+                      <span>NET DITERIMA (NET PAID):</span>
                       <span>
-                        {r.refund_number} ({r.refund_method.toUpperCase()}
-                        {r.status === "pending" ? " · PENDING" : ""})
-                      </span>
-                      <span className="shrink-0">
-                        -Rp {r.amount.toLocaleString("id-ID")}
+                        Rp {data.order.net_paid.toLocaleString("id-ID")}
                       </span>
                     </div>
-                  ))}
-
-                  <div className="flex justify-between pt-1 font-bold text-xs border-t border-dashed border-neutral-400 text-primary print:text-black">
-                    <span>NET DITERIMA (NET PAID):</span>
-                    <span>
-                      Rp {data.order.net_paid.toLocaleString("id-ID")}
-                    </span>
                   </div>
-                </div>
-              </>
-            ) : null}
+                </>
+              );
+            })()}
 
             {/* Footer */}
             {data.restaurant.receipt_footer ? (

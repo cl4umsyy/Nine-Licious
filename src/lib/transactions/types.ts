@@ -6,8 +6,12 @@ import type {
   PaymentRecordStatus,
   PaymentSource,
   PaymentStatus,
+  RefundApprovalStatus,
   RefundMethod,
+  RefundPayoutStatus,
+  RefundReasonCategory,
   RefundRecordStatus,
+  RefundResolutionType,
   RefundType,
   ShiftStatus,
 } from "@/types/database";
@@ -154,14 +158,81 @@ export type AdminTransactionDetail = {
     paymentId: string | null;
     amount: number;
     refundType: RefundType;
+    resolutionType?: RefundResolutionType;
+    approvalStatus?: RefundApprovalStatus;
+    payoutStatus?: RefundPayoutStatus;
+    reasonCategory?: RefundReasonCategory;
+    chronology?: string | null;
+    subtotalAmount?: number;
+    discountAmount?: number;
+    serviceChargeAmount?: number;
+    taxAmount?: number;
+    referenceServiceChargeAmount?: number;
+    referenceTaxAmount?: number;
+    roundingAdjustment?: number;
     refundMethod: RefundMethod;
+    payoutMethod?: string | null;
+    payoutReference?: string | null;
     reason: string;
+    rejectionReason?: string | null;
+    cancellationReason?: string | null;
     status: RefundRecordStatus;
     createdAt: string;
     approvedAt: string | null;
     requesterName: string;
     approverName: string | null;
     gatewayRefundId: string | null;
+    items?: Array<{
+      id: string;
+      orderItemId: string;
+      productName: string;
+      quantity: number;
+      compensationPercentage: number;
+      compensationSeverity: string;
+      netItemAmount: number;
+      serviceChargeAmount: number;
+      taxAmount: number;
+      referenceServiceChargeAmount: number;
+      referenceTaxAmount: number;
+      refundAmount: number;
+      inventoryAction: string;
+    }>;
+    allocations?: Array<{
+      id: string;
+      paymentId: string;
+      payoutMethod: string;
+      amount: number;
+      payoutStatus: string;
+      gatewayRefundId: string | null;
+      payoutReference: string | null;
+    }>;
+    corrections?: Array<{
+      id: string;
+      correctionType: string;
+      expectedAmount: number;
+      actualAmount: number;
+      differenceAmount: number;
+      followUpStatus: string;
+      reason: string;
+      createdAt: string;
+    }>;
+    evidence?: Array<{
+      id: string;
+      fileName: string;
+      fileType: string;
+      fileSize: number;
+      evidenceKind: string;
+      notes: string | null;
+      signedUrl: string | null;
+      createdAt: string;
+    }>;
+    replacement?: {
+      id: string;
+      status: string;
+      replacementOrderId: string | null;
+      replacementOrderNumber: string | null;
+      createdAt: string;
+    } | null;
   }>;
   shifts: Array<{
     id: string;

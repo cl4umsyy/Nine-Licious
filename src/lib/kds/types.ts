@@ -1,4 +1,9 @@
-import type { KdsStatus, OrderType } from "@/types/database";
+import type {
+  KdsCancellationAction,
+  KdsStatus,
+  OrderKind,
+  OrderType,
+} from "@/types/database";
 
 /**
  * Non-financial, non-PII modifier representation for Kitchen Display System (KDS).
@@ -32,6 +37,8 @@ export type KdsTicket = {
   orderNumber: string;
   queueNumber: string | null;
   orderType: OrderType;
+  orderKind?: OrderKind;
+  replacementTableName?: string | null;
   tableName: string | null;
   diningSessionId: string | null;
   isAdditionalOrder: boolean;
@@ -59,6 +66,9 @@ export type KdsRefundAlert = {
   tableName: string | null;
   reason: string;
   notifiedAt: string;
+  productName?: string | null;
+  cancelledQuantity?: number | null;
+  kitchenAction?: KdsCancellationAction | null;
 };
 
 export type KdsStatusFilter = "all" | KdsStatus;

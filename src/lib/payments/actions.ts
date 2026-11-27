@@ -528,6 +528,7 @@ export async function calculateRemainingQueueItems(
     const query = supabase
       .from("orders")
       .select("id, order_number, queue_number, queue_date, kds_status, created_at, order_items(quantity)")
+      .neq("order_kind", "replacement")
       .eq("status", "paid")
       .in("kds_status", ["queued", "preparing"])
       .is("served_at", null)
@@ -540,6 +541,7 @@ export async function calculateRemainingQueueItems(
         const fallbackQuery = supabase
           .from("orders")
           .select("id, order_number, queue_number, queue_date, kds_status, created_at, order_items(quantity)")
+          .neq("order_kind", "replacement")
           .eq("status", "paid")
           .in("kds_status", ["queued", "preparing"])
           .neq("id", currentTarget.id);
@@ -708,10 +710,20 @@ async function buildOrderReceiptDataFallback(
   }
 
   const completedRefundTotal = refunds
-    .filter((r) => r.status === "completed")
+    .filter(
+      (r) =>
+        r.status === "completed" &&
+        r.resolution_type !== "replacement" &&
+        r.payout_status !== "failed",
+    )
     .reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
   const pendingRefundTotal = refunds
-    .filter((r) => r.status === "pending")
+    .filter(
+      (r) =>
+        r.status === "pending" &&
+        r.resolution_type !== "replacement" &&
+        (r.approval_status === undefined || r.approval_status === "approved"),
+    )
     .reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
 
   const settings = settingsRes.data;
@@ -730,6 +742,7 @@ async function buildOrderReceiptDataFallback(
       id: order.id,
       order_number: order.order_number,
       order_type: order.order_type,
+      order_kind: order.order_kind ?? "standard",
       table_name: tableRes.data?.name ?? null,
       customer_name: order.customer_name ?? null,
       status: order.status,
@@ -740,6 +753,7 @@ async function buildOrderReceiptDataFallback(
         (order.created_by ? profileNames.get(order.created_by) : null) ??
         "Kasir",
       created_at: order.created_at,
+      paid_at: order.paid_at ?? null,
       subtotal: Number(order.subtotal) || 0,
       discount_product_total: Number(order.discount_product_total) || 0,
       discount_order_total: Number(order.discount_order_total) || 0,
@@ -801,10 +815,14 @@ async function buildOrderReceiptDataFallback(
       refund_number: r.refund_number,
       gateway_refund_id: r.gateway_refund_id ?? null,
       refund_type: r.refund_type,
+      resolution_type: r.resolution_type,
       refund_method: r.refund_method,
       amount: Number(r.amount) || 0,
       reason: r.reason,
+      reason_category: r.reason_category,
       status: r.status,
+      approval_status: r.approval_status,
+      payout_status: r.payout_status,
       created_at: r.created_at,
       approver_name: r.approved_by
         ? (profileNames.get(r.approved_by) ?? null)

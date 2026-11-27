@@ -1306,6 +1306,7 @@ export async function getActiveOrderForTableAction(
     .from("orders")
     .select("*")
     .eq("table_id", validTableId.data)
+    .neq("order_kind", "replacement")
     .eq("status", "awaiting_payment")
     .order("created_at", { ascending: false })
     .limit(1)
@@ -1665,7 +1666,8 @@ export async function closeDiningSessionAction(
     const { data: ordersData, error: ordersError } = await context.supabase
       .from("orders")
       .select("id, order_number, status, payment_status, kds_status, grand_total, paid_total, served_at")
-      .eq("dining_session_id", sessionId);
+      .eq("dining_session_id", sessionId)
+      .neq("order_kind", "replacement");
 
     if (ordersError) {
       return { ok: false, message: "Gagal memverifikasi pesanan pada sesi ini." };
@@ -1918,6 +1920,7 @@ export async function getDiningSessionSummaryAction(
         "id, order_number, status, payment_status, kds_status, subtotal, discount_total, tax_total, service_total, grand_total, paid_total, served_at, served_by, created_at",
       )
       .eq("dining_session_id", session.id)
+      .neq("order_kind", "replacement")
       .order("created_at", { ascending: true });
 
     const baseOrders: DiningSessionOrderSummary[] = (ordersData ?? []).map((o) => ({

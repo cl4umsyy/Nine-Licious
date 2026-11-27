@@ -114,6 +114,7 @@ export default async function CashierOrdersPage() {
       <CashierOrdersBoard
         initialData={initialData}
         userRole={session.profile.role}
+        currentUserId={session.profile.id}
         initialError={result.ok ? null : result.message}
         activeShift={activeShift}
       />

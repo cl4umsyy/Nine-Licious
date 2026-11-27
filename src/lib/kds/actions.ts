@@ -7,7 +7,12 @@ import { getKitchenActor } from "@/lib/auth/session";
 import { isMissingServingSchemaError } from "@/lib/orders/serving";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import type { KdsStatus, OrderType } from "@/types/database";
+import type {
+  KdsCancellationAction,
+  KdsStatus,
+  OrderKind,
+  OrderType,
+} from "@/types/database";
 import {
   computeAdditionalOrderMap,
   isOrderVisibleInKds,
@@ -41,6 +46,7 @@ type RawKdsOrderRow = {
   order_number: string;
   queue_number: string | null;
   order_type: OrderType;
+  order_kind?: OrderKind;
   table_id: string | null;
   dining_session_id: string | null;
   status: string;
@@ -154,7 +160,7 @@ export async function getKdsBoardDataAction(): Promise<
   const primaryOrdersQuery = await supabase
     .from("orders")
     .select(
-      "id, order_number, queue_number, order_type, table_id, dining_session_id, status, kds_status, served_at, notes, created_at, updated_at, dining_tables(name)",
+      "id, order_number, queue_number, order_type, order_kind, table_id, dining_session_id, status, kds_status, served_at, notes, created_at, updated_at, dining_tables(name)",
     )
     .eq("status", "paid")
     .in("kds_status", ["queued", "preparing", "ready"])
@@ -166,7 +172,7 @@ export async function getKdsBoardDataAction(): Promise<
       const fallbackOrdersQuery = await supabase
         .from("orders")
         .select(
-          "id, order_number, queue_number, order_type, table_id, dining_session_id, status, kds_status, notes, created_at, updated_at, dining_tables(name)",
+          "id, order_number, queue_number, order_type, order_kind, table_id, dining_session_id, status, kds_status, notes, created_at, updated_at, dining_tables(name)",
         )
         .eq("status", "paid")
         .in("kds_status", ["queued", "preparing", "ready"])
@@ -214,8 +220,21 @@ export async function getKdsBoardDataAction(): Promise<
     ),
   );
 
-  // 2. Fetch order items (strictly non-financial projection) & session order chronology
-  const [itemsResult, sessionOrdersResult] = await Promise.all([
+  const replacementOrderIds = activeOrders
+    .filter((row) => row.order_kind === "replacement")
+    .map((row) => row.id);
+  const alertCutoffIso = new Date(
+    Date.now() - REFUND_ALERT_WINDOW_MS,
+  ).toISOString();
+
+  // 2. Fetch order items (strictly non-financial), session order chronology,
+  //    replacement table context & non-financial item cancellation alerts (via RLS).
+  const [
+    itemsResult,
+    sessionOrdersResult,
+    replacementsResult,
+    itemCancellationsResult,
+  ] = await Promise.all([
     orderIds.length > 0
       ? supabase
           .from("order_items")
@@ -233,7 +252,40 @@ export async function getKdsBoardDataAction(): Promise<
           .not("status", "in", "(cancelled,refunded)")
           .order("created_at", { ascending: true })
       : Promise.resolve({ data: [] as RawSessionOrderRow[], error: null }),
+    replacementOrderIds.length > 0
+      ? supabase
+          .from("order_replacements")
+          .select("replacement_order_id, table_name_snapshot")
+          .in("replacement_order_id", replacementOrderIds)
+      : Promise.resolve({
+          data: [] as Array<{
+            replacement_order_id: string | null;
+            table_name_snapshot: string | null;
+          }>,
+          error: null,
+        }),
+    supabase
+      .from("kds_item_cancellations")
+      .select(
+        "id, refund_id, order_id, order_number, queue_number, product_name, cancelled_quantity, kitchen_action, reason, created_at",
+      )
+      .gte("created_at", alertCutoffIso)
+      .order("created_at", { ascending: false })
+      .limit(15),
   ]);
+
+  const replacementTableByOrderId = new Map<string, string | null>();
+  for (const rep of (replacementsResult.data ?? []) as Array<{
+    replacement_order_id: string | null;
+    table_name_snapshot: string | null;
+  }>) {
+    if (rep.replacement_order_id) {
+      replacementTableByOrderId.set(
+        rep.replacement_order_id,
+        rep.table_name_snapshot,
+      );
+    }
+  }
 
   if (itemsResult.error) {
     console.error("[kds] Gagal memuat item pesanan:", itemsResult.error.message);
@@ -304,14 +356,35 @@ export async function getKdsBoardDataAction(): Promise<
   //    (audit_logs and refunds RLS exclude role `kitchen` to protect sensitive financial/audit data.)
   const startedAtByOrderId = new Map<string, string>();
   const readyAtByOrderId = new Map<string, string>();
-  let refundAlerts: KdsRefundAlert[] = [];
+  let refundAlerts: KdsRefundAlert[] = (
+    (itemCancellationsResult.data ?? []) as Array<{
+      id: string;
+      refund_id: string;
+      order_id: string;
+      order_number: string;
+      queue_number: string | null;
+      product_name: string;
+      cancelled_quantity: number;
+      kitchen_action: KdsCancellationAction;
+      reason: string;
+      created_at: string;
+    }>
+  ).map((c) => ({
+    refundId: `${c.refund_id}:${c.id}`,
+    orderId: c.order_id,
+    orderNumber: c.order_number,
+    queueNumber: c.queue_number,
+    orderType: "takeaway",
+    tableName: null,
+    reason: c.reason,
+    notifiedAt: c.created_at,
+    productName: c.product_name,
+    cancelledQuantity: c.cancelled_quantity,
+    kitchenAction: c.kitchen_action,
+  }));
 
   const admin = createSupabaseAdminClient();
   if (admin) {
-    const alertCutoffIso = new Date(
-      Date.now() - REFUND_ALERT_WINDOW_MS,
-    ).toISOString();
-
     const [auditRes, refundRes] = await Promise.all([
       orderIds.length > 0
         ? admin
@@ -347,7 +420,7 @@ export async function getKdsBoardDataAction(): Promise<
     }
 
     if (!refundRes.error && refundRes.data) {
-      refundAlerts = (refundRes.data as RawRefundAlertRow[])
+      const fullAlerts = (refundRes.data as RawRefundAlertRow[])
         .filter((row) => {
           if (!row.kitchen_notified_at) return false;
           const orderObj = Array.isArray(row.orders)
@@ -370,6 +443,7 @@ export async function getKdsBoardDataAction(): Promise<
             notifiedAt: row.kitchen_notified_at as string,
           };
         });
+      refundAlerts = [...refundAlerts, ...fullAlerts].slice(0, 15);
     }
   }
 
@@ -390,6 +464,9 @@ export async function getKdsBoardDataAction(): Promise<
         orderNumber: row.order_number,
         queueNumber: row.queue_number,
         orderType: row.order_type,
+        orderKind: row.order_kind ?? "standard",
+        replacementTableName:
+          replacementTableByOrderId.get(row.id) ?? null,
         tableName: extractTableName(row.dining_tables),
         diningSessionId: row.dining_session_id,
         isAdditionalOrder: sessionMeta?.isAdditionalOrder ?? false,
@@ -546,6 +623,15 @@ export async function updateKdsStatusAction(rawInput: {
       ok: false,
       message: `Status pesanan #${currentOrder.order_number} baru saja berubah oleh proses lain. Silakan muat ulang.`,
     };
+  }
+
+  // Sinkronkan status order_replacements jika tiket ini adalah pesanan Replacement
+  if (validation.to === "ready") {
+    await admin
+      .from("order_replacements")
+      .update({ status: "ready", updated_at: nowIso })
+      .eq("replacement_order_id", updated.id)
+      .in("status", ["approved", "in_kitchen"]);
   }
 
   // 3. Immutable audit trail

@@ -1,9 +1,9 @@
 import { z } from "zod";
 import {
+  ALL_STOCK_MOVEMENT_TYPES,
   INGREDIENT_UNITS,
   INVENTORY_LIMITS,
   MANUAL_STOCK_MOVEMENT_TYPES,
-  STOCK_MOVEMENT_TYPES,
 } from "./constants";
 import { roundQuantity3 } from "./calculations";
 
@@ -295,7 +295,7 @@ export const usageReportFilterSchema = z
       .default(null),
     movementType: z
       .union([
-        z.enum(STOCK_MOVEMENT_TYPES),
+        z.enum(ALL_STOCK_MOVEMENT_TYPES),
         z.null(),
         z.undefined(),
         z.literal(""),

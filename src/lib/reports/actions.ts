@@ -104,13 +104,14 @@ export async function getSalesReportAction(
   const startIso = `${startDate}T00:00:00+07:00`;
   const endIso = `${endDate}T23:59:59.999+07:00`;
 
-  // Query 1: Orders dalam rentang waktu
+  // Query 1: Orders dalam rentang waktu (hanya pesanan penjualan standard, bukan replacement Rp 0)
   const ordersResult = await fetchPaginatedRows<RawOrderRow>((from, to) =>
     supabase
       .from("orders")
       .select(
-        "id, status, subtotal, discount_total, tax_total, service_total, grand_total, paid_total, created_at",
+        "id, order_kind, status, subtotal, discount_total, tax_total, service_total, grand_total, paid_total, created_at",
       )
+      .neq("order_kind", "replacement")
       .gte("created_at", startIso)
       .lte("created_at", endIso)
       .range(from, to),
@@ -129,8 +130,10 @@ export async function getSalesReportAction(
     supabase
       .from("refunds")
       .select(
-        "id, refund_number, order_id, payment_id, amount, reason, refund_type, refund_method, status, approved_at, created_at",
+        "id, refund_number, order_id, payment_id, amount, reason, refund_type, resolution_type, reason_category, approval_status, payout_status, refund_method, status, approved_at, created_at",
       )
+      .neq("resolution_type", "replacement")
+      .eq("payout_status", "completed")
       .gte("created_at", startIso)
       .lte("created_at", endIso)
       .range(from, to),
@@ -287,12 +290,13 @@ export async function getProductPerformanceReportAction(
   const startIso = `${startDate}T00:00:00+07:00`;
   const endIso = `${endDate}T23:59:59.999+07:00`;
 
-  // 1. Ambil order_id dari pesanan yang sah (paid, completed, refunded)
+  // 1. Ambil order_id dari pesanan penjualan standard yang sah (paid, completed, refunded)
   const ordersResult = await fetchPaginatedRows<{ id: string; status: string }>(
     (from, to) =>
       supabase
         .from("orders")
         .select("id, status")
+        .neq("order_kind", "replacement")
         .gte("created_at", startIso)
         .lte("created_at", endIso)
         .in("status", ["paid", "completed", "refunded"])
@@ -423,8 +427,10 @@ export async function getRefundReportAction(
     supabase
       .from("refunds")
       .select(
-        "id, refund_number, order_id, payment_id, amount, reason, refund_type, refund_method, status, approved_at, created_at",
+        "id, refund_number, order_id, payment_id, amount, reason, refund_type, resolution_type, reason_category, approval_status, payout_status, refund_method, status, approved_at, created_at",
       )
+      .neq("resolution_type", "replacement")
+      .eq("payout_status", "completed")
       .gte("created_at", startIso)
       .lte("created_at", endIso)
       .range(from, to),

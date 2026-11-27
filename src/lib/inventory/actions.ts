@@ -14,9 +14,9 @@ import {
   roundQuantity3,
 } from "./calculations";
 import type {
+  AllStockMovementType,
   IngredientUnit,
   ManualStockMovementType,
-  StockMovementType,
 } from "./constants";
 import type {
   Ingredient,
@@ -75,11 +75,14 @@ type RawRecipeRow = {
 type RawStockMovementRow = {
   id: string;
   ingredient_id: string;
-  movement_type: StockMovementType;
+  movement_type: AllStockMovementType;
   quantity_delta: number | string;
+  wasted_quantity?: number | string | null;
   stock_before: number | string;
   stock_after: number | string;
   order_id: string | null;
+  refund_id?: string | null;
+  order_item_id?: string | null;
   reason: string;
   idempotency_key: string | null;
   created_by: string | null;
@@ -133,9 +136,12 @@ function normalizeStockMovement(row: RawStockMovementRow): StockMovement {
     ingredient_id: row.ingredient_id,
     movement_type: row.movement_type,
     quantity_delta: roundQuantity3(row.quantity_delta),
+    wasted_quantity: roundQuantity3(row.wasted_quantity ?? 0),
     stock_before: roundQuantity3(row.stock_before),
     stock_after: roundQuantity3(row.stock_after),
     order_id: row.order_id,
+    refund_id: row.refund_id ?? null,
+    order_item_id: row.order_item_id ?? null,
     reason: row.reason,
     idempotency_key: row.idempotency_key,
     created_by: row.created_by,

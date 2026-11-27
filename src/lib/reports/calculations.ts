@@ -13,6 +13,7 @@ import type {
 
 export type RawOrderRow = {
   id: string;
+  order_kind?: string | null;
   status: string;
   subtotal: number;
   discount_total: number;
@@ -51,6 +52,10 @@ export type RawRefundRow = {
   amount: number;
   reason: string;
   refund_type: string;
+  resolution_type?: string | null;
+  reason_category?: string | null;
+  approval_status?: string | null;
+  payout_status?: string | null;
   refund_method: string;
   status: string;
   approved_at: string | null;
@@ -134,12 +139,19 @@ export function calculateSalesReport(
   period: { startDate: string; endDate: string },
   totalReceipts: number,
 ): SalesReportData {
-  const eligibleOrders = orders.filter((order) =>
-    ["paid", "completed", "refunded"].includes(order.status),
+  const eligibleOrders = orders.filter(
+    (order) =>
+      (order.order_kind ?? "standard") === "standard" &&
+      ["paid", "completed", "refunded"].includes(order.status),
   );
 
   const completedRefunds = refunds.filter(
-    (refund) => refund.status === "completed",
+    (refund) =>
+      refund.status === "completed" &&
+      refund.resolution_type !== "replacement" &&
+      (refund.payout_status === undefined ||
+        refund.payout_status === null ||
+        refund.payout_status === "completed"),
   );
 
   let grossSales = 0;
@@ -466,7 +478,14 @@ export function calculateRefundReport(
   refunds: RawRefundRow[],
   period: { startDate: string; endDate: string },
 ): RefundReportData {
-  const completedRefunds = refunds.filter((r) => r.status === "completed");
+  const completedRefunds = refunds.filter(
+    (r) =>
+      r.status === "completed" &&
+      r.resolution_type !== "replacement" &&
+      (r.payout_status === undefined ||
+        r.payout_status === null ||
+        r.payout_status === "completed"),
+  );
 
   let totalRefundAmount = 0;
   let fullRefundTotal = 0;
@@ -484,6 +503,8 @@ export function calculateRefundReport(
     if (method === "midtrans") return "Midtrans Gateway";
     if (method === "transfer") return "Transfer Bank Manual";
     if (method === "manual") return "Manual";
+    if (method === "mixed") return "Campuran (Split Bill)";
+    if (method === "none") return "Tanpa Pencairan";
     return method;
   }
 
@@ -518,6 +539,15 @@ export function calculateRefundReport(
       amount,
       reason: r.reason,
       refundType: r.refund_type === "full" ? "full" : "partial",
+      resolutionType:
+        r.resolution_type === "full_refund" ||
+        r.resolution_type === "partial_refund" ||
+        r.resolution_type === "replacement"
+          ? r.resolution_type
+          : undefined,
+      reasonCategory: r.reason_category ?? undefined,
+      approvalStatus: r.approval_status ?? undefined,
+      payoutStatus: r.payout_status ?? undefined,
       refundMethod: r.refund_method,
       status: r.status,
       approvedAt: r.approved_at,

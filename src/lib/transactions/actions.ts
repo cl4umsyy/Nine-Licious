@@ -1,6 +1,7 @@
 "use server";
 
 import { getAdminActor } from "@/lib/auth/session";
+import { resolveEffectiveReplacementStatus } from "@/lib/refunds/calculations";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import type {
   AdminTransactionDetail,
@@ -19,14 +20,23 @@ import type {
   OrderDiscount,
   OrderItem,
   OrderItemModifier,
+  OrderReplacement,
   OrderStatus,
   OrderType,
   PaymentMethod,
   PaymentRecordStatus,
   PaymentSource,
   PaymentStatus,
+  RefundApprovalStatus,
+  RefundCorrection,
+  RefundEvidence,
+  RefundItem,
   RefundMethod,
+  RefundPayoutAllocation,
+  RefundPayoutStatus,
+  RefundReasonCategory,
   RefundRecordStatus,
+  RefundResolutionType,
   RefundType,
   ShiftStatus,
 } from "@/types/database";
@@ -71,9 +81,25 @@ type RawRefundWithProfiles = {
   refund_number: string;
   gateway_refund_id: string | null;
   refund_type: RefundType;
+  resolution_type?: RefundResolutionType;
+  approval_status?: RefundApprovalStatus;
+  payout_status?: RefundPayoutStatus;
+  reason_category?: RefundReasonCategory;
+  chronology?: string | null;
+  subtotal_amount?: number;
+  discount_amount?: number;
+  service_charge_amount?: number;
+  tax_amount?: number;
+  reference_service_charge_amount?: number;
+  reference_tax_amount?: number;
+  rounding_adjustment?: number;
   refund_method: RefundMethod;
+  payout_method?: string | null;
+  payout_reference?: string | null;
   amount: number;
   reason: string;
+  rejection_reason?: string | null;
+  cancellation_reason?: string | null;
   status: RefundRecordStatus;
   created_at: string;
   approved_at: string | null;
@@ -227,13 +253,14 @@ export async function getAdminTransactionsAction(
     }
   }
 
-  // 3. Bangun query orders
+  // 3. Bangun query orders (hanya pesanan penjualan standard; replacement Rp 0 tidak mencemari statistik transaksi)
   let query = supabase
     .from("orders")
     .select(
       "id, order_number, queue_number, queue_date, business_date, order_type, table_id, customer_name, status, payment_status, kds_status, grand_total, paid_total, refunded_total, created_by, created_at, updated_at",
       { count: "exact" },
-    );
+    )
+    .neq("order_kind", "replacement");
 
   // Filter Tanggal Asia/Jakarta
   if (filter.startDate) {
@@ -368,7 +395,8 @@ export async function getAdminTransactionsAction(
         .in("order_id", orderIds),
       supabase
         .from("refunds")
-        .select("id, order_id, status, amount")
+        .select("id, order_id, status, amount, resolution_type, payout_status")
+        .neq("resolution_type", "replacement")
         .in("order_id", orderIds),
     ]);
 
@@ -672,6 +700,168 @@ export async function getAdminTransactionDetailAction(
   const refunds = (refundsRes.data || []) as RawRefundWithProfiles[];
   const refundIds = refunds.map((r) => r.id);
 
+  // Ambil rincian R1-R5 (items, allocations, corrections, evidence, replacement)
+  const [
+    refundItemsRes,
+    refundAllocsRes,
+    refundCorrectionsRes,
+    refundEvidenceRes,
+    replacementsRes,
+  ] =
+    refundIds.length > 0
+      ? await Promise.all([
+          supabase
+            .from("refund_items")
+            .select("*")
+            .in("refund_id", refundIds)
+            .order("created_at", { ascending: true }),
+          supabase
+            .from("refund_payout_allocations")
+            .select("*")
+            .in("refund_id", refundIds)
+            .order("created_at", { ascending: true }),
+          supabase
+            .from("refund_corrections")
+            .select("*")
+            .in("refund_id", refundIds)
+            .order("created_at", { ascending: false }),
+          supabase
+            .from("refund_evidence")
+            .select("*")
+            .in("refund_id", refundIds)
+            .order("created_at", { ascending: true }),
+          supabase
+            .from("order_replacements")
+            .select("id, refund_id, status, replacement_order_id, created_at")
+            .in("refund_id", refundIds),
+        ])
+      : [
+          { data: [] as RefundItem[] },
+          { data: [] as RefundPayoutAllocation[] },
+          { data: [] as RefundCorrection[] },
+          { data: [] as RefundEvidence[] },
+          { data: [] as Array<{ id: string; refund_id: string; status: string; replacement_order_id: string | null; created_at: string }> },
+        ];
+
+  const refundItemsByRefund = new Map<string, RefundItem[]>();
+  for (const row of (refundItemsRes.data || []) as RefundItem[]) {
+    const list = refundItemsByRefund.get(row.refund_id) || [];
+    list.push(row);
+    refundItemsByRefund.set(row.refund_id, list);
+  }
+
+  const refundAllocsByRefund = new Map<string, RefundPayoutAllocation[]>();
+  for (const row of (refundAllocsRes.data || []) as RefundPayoutAllocation[]) {
+    const list = refundAllocsByRefund.get(row.refund_id) || [];
+    list.push(row);
+    refundAllocsByRefund.set(row.refund_id, list);
+  }
+
+  const refundCorrByRefund = new Map<string, RefundCorrection[]>();
+  for (const row of (refundCorrectionsRes.data || []) as RefundCorrection[]) {
+    const list = refundCorrByRefund.get(row.refund_id) || [];
+    list.push(row);
+    refundCorrByRefund.set(row.refund_id, list);
+  }
+
+  const replacementOrderIds = Array.from(
+    new Set(
+      (replacementsRes.data || [])
+        .map((r) => r.replacement_order_id)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  );
+  const replacementOrderMap = new Map<
+    string,
+    { orderNumber: string; kds_status: string | null; served_at: string | null }
+  >();
+  if (replacementOrderIds.length > 0) {
+    const { data: repOrdData } = await supabase
+      .from("orders")
+      .select("id, order_number, kds_status, served_at")
+      .in("id", replacementOrderIds);
+    for (const row of (repOrdData || []) as Array<{
+      id: string;
+      order_number: string;
+      kds_status: string | null;
+      served_at: string | null;
+    }>) {
+      replacementOrderMap.set(row.id, {
+        orderNumber: row.order_number,
+        kds_status: row.kds_status,
+        served_at: row.served_at,
+      });
+    }
+  }
+
+  const replacementByRefund = new Map<
+    string,
+    {
+      id: string;
+      status: string;
+      replacementOrderId: string | null;
+      replacementOrderNumber: string | null;
+      createdAt: string;
+    }
+  >();
+  for (const row of (replacementsRes.data || []) as Array<{
+    id: string;
+    refund_id: string;
+    status: OrderReplacement["status"];
+    replacement_order_id: string | null;
+    created_at: string;
+  }>) {
+    const repOrd = row.replacement_order_id
+      ? replacementOrderMap.get(row.replacement_order_id)
+      : undefined;
+    replacementByRefund.set(row.refund_id, {
+      id: row.id,
+      status: resolveEffectiveReplacementStatus(row.status, repOrd),
+      replacementOrderId: row.replacement_order_id,
+      replacementOrderNumber: repOrd?.orderNumber ?? null,
+      createdAt: row.created_at,
+    });
+  }
+
+  const refundEvidenceByRefund = new Map<
+    string,
+    Array<{
+      id: string;
+      fileName: string;
+      fileType: string;
+      fileSize: number;
+      evidenceKind: string;
+      notes: string | null;
+      signedUrl: string | null;
+      createdAt: string;
+    }>
+  >();
+  const evidenceRows = (refundEvidenceRes.data || []) as RefundEvidence[];
+  if (evidenceRows.length > 0) {
+    const signedResults = await Promise.all(
+      evidenceRows.map(async (ev) => {
+        const { data: signed } = await supabase.storage
+          .from("refund-evidence")
+          .createSignedUrl(ev.file_path, 300);
+        return { ev, signedUrl: signed?.signedUrl ?? null };
+      }),
+    );
+    for (const { ev, signedUrl } of signedResults) {
+      const list = refundEvidenceByRefund.get(ev.refund_id) || [];
+      list.push({
+        id: ev.id,
+        fileName: ev.file_name,
+        fileType: ev.file_type,
+        fileSize: Number(ev.file_size) || 0,
+        evidenceKind: ev.evidence_kind,
+        notes: ev.notes ?? null,
+        signedUrl,
+        createdAt: ev.created_at,
+      });
+      refundEvidenceByRefund.set(ev.refund_id, list);
+    }
+  }
+
   let movementsQuery = supabase
     .from("cash_movements")
     .select("*, creator:profiles!cash_movements_created_by_fkey(full_name, username)")
@@ -850,21 +1040,73 @@ export async function getAdminTransactionDetailAction(
     new Set(successfulPayments.map((p) => p.payment_method)),
   );
 
-  // 9. Susun Rincian Refund
+  // 9. Susun Rincian Refund + R1-R5 Sub-Ledger
   const parsedRefunds = refunds.map((r) => ({
     id: r.id,
     refundNumber: r.refund_number,
     paymentId: r.payment_id,
     amount: r.amount,
     refundType: r.refund_type,
+    resolutionType: r.resolution_type,
+    approvalStatus: r.approval_status,
+    payoutStatus: r.payout_status,
+    reasonCategory: r.reason_category,
+    chronology: r.chronology ?? null,
+    subtotalAmount: r.subtotal_amount ?? 0,
+    discountAmount: r.discount_amount ?? 0,
+    serviceChargeAmount: r.service_charge_amount ?? 0,
+    taxAmount: r.tax_amount ?? 0,
+    referenceServiceChargeAmount: r.reference_service_charge_amount ?? 0,
+    referenceTaxAmount: r.reference_tax_amount ?? 0,
+    roundingAdjustment: r.rounding_adjustment ?? 0,
     refundMethod: r.refund_method,
+    payoutMethod: r.payout_method ?? null,
+    payoutReference: r.payout_reference ?? null,
     reason: r.reason,
+    rejectionReason: r.rejection_reason ?? null,
+    cancellationReason: r.cancellation_reason ?? null,
     status: r.status,
     createdAt: r.created_at,
     approvedAt: r.approved_at,
     requesterName: r.requester?.full_name ?? "Kasir",
     approverName: r.approver?.full_name ?? null,
     gatewayRefundId: r.gateway_refund_id ?? null,
+    items: (refundItemsByRefund.get(r.id) || []).map((ri) => ({
+      id: ri.id,
+      orderItemId: ri.order_item_id,
+      productName: ri.product_name_snapshot,
+      quantity: ri.quantity,
+      compensationPercentage: ri.compensation_percentage,
+      compensationSeverity: ri.compensation_severity,
+      netItemAmount: ri.net_item_amount,
+      serviceChargeAmount: ri.service_charge_amount,
+      taxAmount: ri.tax_amount,
+      referenceServiceChargeAmount: ri.reference_service_charge_amount,
+      referenceTaxAmount: ri.reference_tax_amount,
+      refundAmount: ri.refund_amount,
+      inventoryAction: ri.inventory_action,
+    })),
+    allocations: (refundAllocsByRefund.get(r.id) || []).map((al) => ({
+      id: al.id,
+      paymentId: al.payment_id,
+      payoutMethod: al.payout_method,
+      amount: al.amount,
+      payoutStatus: al.payout_status,
+      gatewayRefundId: al.gateway_refund_id ?? null,
+      payoutReference: al.payout_reference ?? null,
+    })),
+    corrections: (refundCorrByRefund.get(r.id) || []).map((c) => ({
+      id: c.id,
+      correctionType: c.correction_type,
+      expectedAmount: c.expected_amount,
+      actualAmount: c.actual_amount,
+      differenceAmount: c.difference_amount,
+      followUpStatus: c.follow_up_status,
+      reason: c.reason,
+      createdAt: c.created_at,
+    })),
+    evidence: refundEvidenceByRefund.get(r.id) || [],
+    replacement: replacementByRefund.get(r.id) ?? null,
   }));
 
   // 10. Susun Rincian Cash Movements
